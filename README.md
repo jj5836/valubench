@@ -1,5 +1,6 @@
 # valubench
 
+[![build and check](https://github.com/erichardisty/valubench/actions/workflows/ci.yml/badge.svg)](https://github.com/erichardisty/valubench/actions/workflows/ci.yml)
 [![license: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
 An integer SIMD microbenchmark. It measures how fast hardware executes the
