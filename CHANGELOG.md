@@ -3,6 +3,20 @@
 Notable changes. Measured figures are not repeated here — they live in
 [RESULTS.md](RESULTS.md), which records the machine each came from.
 
+## Unreleased
+
+### Fixed
+
+- **The scalar kernel was not scalar.** At `-O2`, GCC's SLP vectoriser fused the
+  independent streams and emitted SSE2 on x86-64 and NEON on AArch64 — 88% and
+  79% of the two-stream kernel's instructions — while clang did not, so the
+  baseline every ISA ratio divides by depended on the compiler. That translation
+  unit is now built with `-fno-tree-vectorize -fno-tree-slp-vectorize`, and
+  `make check` disassembles the result and fails if more than 5% of its
+  instructions touch a vector register. Scalar figures measured before this are
+  marked in [RESULTS.md](RESULTS.md#scalar-baseline) and should not be used as
+  denominators.
+
 ## 0.5.0 — 2026-08-23
 
 First public release. What it contains:

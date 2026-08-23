@@ -51,6 +51,11 @@ on a rented machine before measuring on one.
   [environment and noise](#environment-and-noise).
 - Compare two result sets with `tools/compare.py`, which pairs points by
   workload and refuses to compare across a checksum mismatch.
+- **Scalar figures dated before 2026-08-23 are not a scalar baseline.** GCC was
+  auto-vectorising that kernel, so multi-stream "scalar" numbers are partly SSE2
+  or NEON. Every ratio that divides by one is wrong by the amount described in
+  [the scalar baseline](#scalar-baseline). Rows measured with the corrected
+  kernel are marked.
 
 ---
 
@@ -145,18 +150,31 @@ substantially wider core. Note the checksums are identical across both.
 ### Stream interleaving is the largest single win
 
 <a id="streams"></a>
-**N100, single thread, 55-byte messages, MD5**, from `--verbose` autotune output.
+**N100, single thread, 55-byte messages, MD5**, re-measured 2026-08-23 with a
+[genuinely scalar kernel](#scalar-baseline), 15 samples:
 
 | kernel | MH/s | |
 |---|---:|---|
-| `scalar-s1` | 9.41 | one chain |
-| `scalar-s4` | 29.49 | **3.1x, from stream interleaving alone** |
-| `sse2-s3` | 51.52 | |
-| `avx2-s4` | 54.62 | |
+| `scalar-s1` | 9.36 | one chain — this measures latency, not throughput |
+| `scalar-s2` | 14.79 | |
+| `scalar-s3` | **15.92** | **1.70x, from stream interleaving alone** |
+| `scalar-s4` | 14.71 | four streams no longer fit in 16 registers |
+| `sse2-s3` | 41.28 | |
+| `avx2-s4` | 42.26 | |
 
 MD5's 64 steps are one serial dependency chain and SIMD does not break it — all
 lanes of a vector advance in lockstep as a single chain. A one-stream kernel
 measures dependency latency, not throughput.
+
+The scalar path peaks at **three** streams and falls back at four: x86-64 has
+sixteen general-purpose registers, and four streams of four state words plus
+message words and temporaries no longer fit. The vector paths do not have that
+problem until much later, which is a register-file story rather than an
+execution-resource one.
+
+*The earlier figures here — scalar-s1 9.41, scalar-s4 29.49, "3.1x from
+interleaving" — were measured before the scalar kernel was scalar. The 29.49 was
+an auto-vectorised SSE2 kernel, which is why it looked so strong.*
 
 <a id="streams-zen5"></a>
 **On a wide out-of-order core the scalar path no longer needs the help.**
@@ -167,16 +185,17 @@ EPYC-9R45, single thread, MD5:
 | `scalar` | 15.41 | **10.59** | 17.05 | 18.07 | **1.17x** |
 | `avx512` | 134.87 | 221.53 | 281.91 | 344.06 | **2.55x** |
 
-The scalar row is the finding: 1.17x on Zen 5 against 3.1x on the N100. A core
-with a deep enough window extracts the instruction-level parallelism that stream
-interleaving was manufacturing by hand, so there is little left to win. The
-vector rows still gain 2.55x, because a 512-bit chain occupies the machine
-differently from a scalar one.
+**The scalar row is not a scalar measurement** — s2 through s4 were
+auto-vectorised into SSE2 by the compiler, and this machine was gone before that
+was found, so it cannot be re-measured. See [the scalar
+baseline](#scalar-baseline). The `avx512` row is unaffected: that kernel is
+intrinsics, and what it does is what was written.
 
-**The `scalar-s2` dip is real and reproduces** — 10.59 MH/s in two independent
-sweeps, slower than one stream. Two interleaved scalar chains are apparently
-worse than one on this core; three and four recover. Unexplained, and worth a
-look at the generated code before anyone trusts a two-stream scalar number.
+Read the scalar row as "what GCC produced from scalar C on a strong
+out-of-order core", and read the 0.69x at two streams as the cost of packing two
+streams into four lanes on a core whose scalar path was already fast. It is the
+deepest such loss measured, and Zen 5 is exactly where the theory predicts the
+deepest loss.
 
 <a id="streams-graviton3"></a>
 **On AArch64 the best stream count depends on the algorithm, and for two of
@@ -225,23 +244,54 @@ peak at s2 — so those are properties of the core. SHA-512's peak moved from s1
 to s3 and its curve flattened to a 4% spread, which is what a different register
 allocator looks like on the kernel with the least room.
 
-<a id="scalar-s2"></a>
-**The `scalar-s2` dip has now been seen three times, on two architectures and
-two compilers**, and it is time to stop calling it a curiosity:
+<a id="scalar-baseline"></a>
+### The scalar baseline was not scalar
 
-| | s1 | s2 | dip |
-|---|---:|---:|---:|
-| EPYC-9R45 (Zen 5, gcc 13.3) | 15.41 | 10.59 | **−31%** |
-| Graviton3 (Neoverse V1, gcc 13.3) | 7.24 | 6.71 | −7% |
-| Graviton3-16 (Neoverse V1, gcc 15.2) | 7.24 | 5.58 | **−23%** |
+**Found 2026-08-23, and it invalidates every scalar figure above dated earlier.**
+The `scalar` kernels are plain C with no intrinsics, compiled with no `-m`
+flags. At `-O2`, GCC's SLP vectoriser fuses the independent streams and emits
+vector code anyway:
 
-Two interleaved scalar chains are slower than one, every time, and three
-recover. A microarchitectural explanation would have to hold for both an x86 and
-an AArch64 core; a codegen explanation only has to hold for the shared template,
-and the fact that changing *only* the compiler changes the depth from 7% to 23%
-points firmly at the latter. Reading the generated code is the next step, and
-until someone does, **no two-stream scalar number in this file should be
-quoted.**
+| kernel | instructions touching a vector register |
+|---|---:|
+| `scalar-s1` | 1.2% — prologue only, genuinely scalar |
+| `scalar-s2` | **88.0%** (SSE2 on x86-64), **78.9%** (NEON on AArch64) |
+| `scalar-s3` | 55.8% |
+| `scalar-s4` | 84.2% |
+
+SHA-1 and SHA-512 are affected the same way. Clang does not do this at all, so
+the same source produced a *different baseline depending on the compiler* — a
+worse property than either behaviour alone.
+
+**This explains the two-stream dip completely.** At two streams the compiler
+packs two independent hashes into four-lane registers, wasting half the width
+and paying pack and unpack costs on every step. Whether that beats honest scalar
+code depends entirely on how strong the core's scalar path is:
+
+| core | s2 as measured (auto-vectorised) | vs its own s1 |
+|---|---:|---:|
+| Gracemont, N100 | 12.31 | 1.31x — weak scalar path, so half-empty vectors still win |
+| Zen 5, EPYC-9R45 | 10.59 | **0.69x** — strong scalar path, so the trade is a loss |
+| Neoverse V1, gcc 13.3 | 6.71 | 0.93x |
+| Neoverse V1, gcc 15.2 | 5.58 | 0.77x — newer vectoriser, worse trade |
+
+The N100 never dipped below 1.0x, which is why the effect hid there for six
+days. It was still losing: **14.79 MH/s honest scalar against 12.31
+auto-vectorised, a 17% cost** the ladder never revealed because it stayed above
+s1.
+
+**The fix** is `-fno-tree-vectorize -fno-tree-slp-vectorize` on that translation
+unit alone. `make check` now disassembles the built object and fails if more
+than 5% of its instructions touch a vector register, because a flag that stops
+being honoured would restore the old behaviour with no symptom except numbers
+that quietly improve.
+
+**What is still wrong in this file.** The corrected N100 figures are
+[above](#streams). EPYC-9R45 and both Graviton3 instances were terminated before
+this was found, so their scalar rows cannot be re-measured and are left in place,
+marked, as a record of what the vectorised kernel did. **Do not quote a ratio
+that divides by one of them** — including the 3.48x NEON-over-scalar figure,
+whose denominator was partly NEON.
 
 ### ISA generation beats vector width, and the datapath decides by how much
 
@@ -330,13 +380,13 @@ reports 32 bytes on this instance. Nothing here proves SVE would deliver 2x —
 that the datapath declined to honour — but on V1 the width is real rather than
 cracked, and the measured headroom is where it would have to come from.
 
-**The `scalar-s2` dip reproduces on a second architecture.** 7.24 → 6.71 at two
-streams, recovering to 9.99 at three, the same shape [Zen 5 shows](#streams-zen5)
-at 15.41 → 10.59 → 17.12, though milder here (−7% against −31%). Two unrelated
-microarchitectures, one AArch64 and one x86, doing the same non-monotonic thing
-points at the shared C template's generated code rather than at either core's
-scheduler. It remains unexplained, but it is no longer a single-machine
-curiosity.
+**The `scalar-s2` dip appeared here too** — 7.24 → 6.71 at two streams,
+recovering to 9.99 at three — and chasing it across this machine and Zen 5 is
+what eventually found the cause: the compiler was vectorising the scalar kernel,
+and NEON on AArch64 for exactly the same reason it emitted SSE2 on x86. See [the
+scalar baseline](#scalar-baseline). **The scalar rows in the tables above are
+therefore not a scalar baseline**, and the 3.48x NEON-over-scalar ratio divides
+by a denominator that was itself partly NEON.
 
 ### The compiler is a variable, and a large one
 

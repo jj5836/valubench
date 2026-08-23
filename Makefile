@@ -141,7 +141,13 @@ endif
 # Nothing else in the build sees those flags, so no ISA can leak into the
 # dispatcher or the harness.
 
-KFLAGS_scalar :=
+# GCC auto-vectorises the independent streams in this translation unit: at -O2
+# it turns scalar-s2 into 88% SSE2 on x86 and 79% NEON on AArch64, using two of
+# four lanes. That makes the scalar rung secretly a vector one, which is the
+# baseline every ISA ratio in RESULTS.md divides by -- and it is not even
+# consistent, since clang does not do it at all. Both spellings are accepted by
+# gcc and clang; SLP is the one that fuses the streams.
+KFLAGS_scalar := -fno-tree-vectorize -fno-tree-slp-vectorize
 KFLAGS_sse2   := -msse2
 KFLAGS_avx2   := -mavx2
 KFLAGS_avx512 := -mavx512f
@@ -311,7 +317,16 @@ test: $(BUILD)/test_hashes
 check-kernels: $(BUILD)/test_kernels
 	$(BUILD)/test_kernels
 
-check: test check-kernels
+# The scalar rung is the denominator of every ISA ratio reported, so verify it
+# is scalar rather than trusting KFLAGS_scalar to have been honoured. Uses the
+# toolchain's own objdump so it works under cross-compilation, and skips itself
+# if there is none.
+OBJDUMP ?= $(shell echo $(CC) | sed 's/g\?cc$$/objdump/;s/clang/objdump/')
+
+check-scalar: $(BUILD)/kernel_scalar.o
+	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)
+
+check: test check-kernels check-scalar
 
 clean:
 	rm -rf $(BUILD)
