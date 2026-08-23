@@ -502,10 +502,12 @@ throughput on this part.
 
 **2. Stream interleaving is worthless on SHA-NI — uniquely.** Interleaving
 independent dependency chains is the single most load-bearing optimisation in
-this benchmark -- 1.70x on a genuinely scalar path on the N100, and every
-other
-kernel peaks at 2-4 streams. On SHA-NI the ordering inverts and is monotonic
-(the ladder).
+this benchmark -- 2.30x on a genuinely scalar path on Zen 5, 1.70x on the N100
+-- and where the peak sits depends on how much live state a stream carries. MD5
+climbs to four streams on every instruction set; SHA-1 and SHA-512 carry a
+rolling sixteen-word message schedule as well as their state, peak at two
+streams and one respectively, and then fall off sharply. On SHA-NI the ordering
+inverts and is monotonic.
 
 A single chain already saturates the unit. Working backwards from the measured
 rate: ~63 cycles per 64-byte block, over 20 `SHA1RNDS4` instructions, so ~3.1

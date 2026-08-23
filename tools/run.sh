@@ -538,28 +538,39 @@ PY
 
 # ------------------------------------------------ C7: the two cheap axes
 
-say "C7  message length and working set, on the best MD5 kernel"
-note "MC/s should be flat in both -- it is the length-invariant figure, and the"
-note "corpus is far to the right of the roofline ridge point. Where it is not"
-note "flat, that is a property of this machine and worth recording as one."
+say "C7  message length and working set: the roofline axes"
+note "MC/s should be flat against message length. Against working set it is"
+note "flat only while the corpus fits -- a fast enough kernel asks for more"
+note "bandwidth than the machine has, and the loss shows where the roof is."
 
+# The two fastest rungs, not just the fastest. On a part where the widest ISA
+# outruns DRAM and the next one down does not, one kernel cannot show that:
+# the sweep records a collapse with no way to tell the machine from the kernel.
 BESTK=$(python3 - "$OUT/c1-isa-ladder.csv" 2>/dev/null <<'PY'
 import csv, sys
 try:
     rows = [r for r in csv.DictReader(open(sys.argv[1])) if r["hashes_per_sec"]]
 except OSError:
     rows = []
-if rows:
-    print(max(rows, key=lambda r: float(r["hashes_per_sec"]))["kernel"])
+best = {}
+for r in rows:
+    isa = r["kernel"].split("/")[1].split("-")[0]
+    v = float(r["hashes_per_sec"])
+    if v > best.get(isa, (0, ""))[0]:
+        best[isa] = (v, r["kernel"])
+top = sorted(best.values(), reverse=True)[:2]
+print(",".join(k for _, k in top))
 PY
 )
 if [ -n "$BESTK" ]; then
     note "using $BESTK"
-    $SW --algorithm md5 --kernel "$BESTK" --threads 1 \
+    $SW --algorithm md5 --kernel "${BESTK%%,*}" --threads 1 \
         --message-bytes 8,24,55,56,119,247,503,1015,4087 \
         --csv "$OUT/c7-msgsize.csv" >> "$LOG" 2>&1
+    # Out to 128 MiB, and with points either side of a typical last-level
+    # cache, so a knee can be located rather than merely noticed.
     $SW --algorithm md5 --kernel "$BESTK" --threads 1 \
-        --working-set-kb 64,256,1024,4096,16384,65536 \
+        --working-set-kb 64,1024,4096,16384,32768,49152,65536,131072 \
         --csv "$OUT/c7-workingset.csv" >> "$LOG" 2>&1
     python3 - "$OUT/c7-msgsize.csv" "$OUT/c7-workingset.csv" <<'PY' | show
 import csv, sys
@@ -583,18 +594,33 @@ if rows:
               % ((max(mc) / min(mc) - 1) * 100))
 rows = load(sys.argv[2])
 if rows:
-    print("      %10s %10s" % ("WS KiB", "MH/s"))
-    v = []
+    # One column per kernel, so a knee that only the wider one hits is visible
+    # as a knee rather than as noise.
+    ks, by = [], {}
     for r in rows:
-        h = float(r["hashes_per_sec"]) / 1e6
-        v.append(h)
-        print("      %10s %10.2f" % (r["working_set_kb"], h))
-    if v:
-        print("      cache-resident to DRAM costs: %.1f%%"
-              % ((1 - min(v) / max(v)) * 100))
+        k, w = r["kernel"], int(r["working_set_kb"])
+        if k not in ks:
+            ks.append(k)
+        by.setdefault(w, {})[k] = (float(r["hashes_per_sec"]) / 1e6,
+                                   float(r["message_bytes_per_sec"]) / 1e9)
+    print("      %10s %s" % ("WS MiB", "".join("%16s" % k.split("/")[1] for k in ks)))
+    for w in sorted(by):
+        cells = "".join("%10.1f MH/s" % by[w][k][0] if k in by[w] else "%16s" % "-"
+                        for k in ks)
+        print("      %10.0f %s" % (w / 1024.0, cells))
+    for k in ks:
+        vals = [by[w][k][0] for w in sorted(by) if k in by[w]]
+        gbs  = [by[w][k][1] for w in sorted(by) if k in by[w]]
+        if not vals:
+            continue
+        loss = (1 - min(vals) / max(vals)) * 100
+        verdict = ("memory-bound past the knee" if loss > 15 else
+                   "compute-bound throughout")
+        print("      %-16s %5.0f%% from resident to DRAM, %.1f -> %.1f GB/s -- %s"
+              % (k.split("/")[1], loss, max(gbs), min(gbs), verdict))
 PY
 else
-    note "no P1 CSV to pick a kernel from -- skipped."
+    note "no C1 CSV to pick a kernel from -- skipped."
 fi
 fi   # DO_CPU
 

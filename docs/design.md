@@ -76,9 +76,10 @@ Two caveats that matter more than the ratio itself:
   Expect a materially smaller ratio elsewhere — plausibly below 1 on a core with
   full-width AVX-512 and no SHA unit.
 - **Stream interleaving does nothing here, and that is itself the finding.**
-  Every other kernel in this benchmark needs 3-4 interleaved streams to fill the
-  pipeline, and interleaving is the single largest win in the benchmark. On
-  SHA-NI more streams are monotonically *worse*
+  Interleaving is the single largest win in the benchmark everywhere else,
+  though how many streams pay depends on the algorithm: MD5 wants four, SHA-1
+  two, SHA-512 one or two, set by how much live state a stream carries against
+  the register file. On SHA-NI more streams are monotonically *worse*
   (the ladder). A single dependency chain already saturates
   the unit, so `SHA1RNDS4`'s reciprocal throughput must be close to its latency.
   Extra streams buy nothing and cost registers.
@@ -129,25 +130,39 @@ full-digest variants reported separately — full readback adds ~29% to bus
 traffic at 55-byte messages and ~0.4% at 4096), and **pinned vs pageable host
 memory**, which is often a 2x bandwidth difference and shifts N\* accordingly.
 
-## 2a. On CPUs there is no memory-side crossover to find
+## 2a. The CPU memory-side crossover is real, but only a fast ISA reaches it
 
 Goal 2 as originally written — "pure compute bound and PCIe **or memory**
-bound" — also implies a memory-side crossover. On a CPU, with MD5, there
-essentially is not one.
+bound" — also implies a memory-side crossover. For a long time this section said
+there was not one on a CPU. That was wrong, and instructively so.
 
-One MD5 compression is several hundred integer operations per 64 bytes consumed.
-That operational intensity puts the workload far to the right of the roofline
-ridge point on any machine we are likely to meet. Measured on the development
-box, moving the working set from L2-resident to 128 MiB costs about a tenth of
-throughput, and DRAM is no worse than L3
-(the sweep). There is no knee to find.
+One MD5 compression is several hundred integer operations per 64 bytes consumed,
+which puts the workload far to the right of the roofline ridge point — *at the
+rate the machine can hash*. Three machines saw no knee: the development N100
+loses about a tenth of its throughput moving from L2-resident to 128 MiB, and
+Graviton3 loses 1.6% over the same range. Both conclusions were correct about
+those parts and wrong as generalisations.
+
+A Zen 5 core running AVX-512 hashes fast enough to ask for **17.6 GB/s** of
+message traffic, and single-thread DRAM supplies about 10. It loses **44%** when
+the corpus leaves the L3 slice. On the same machine, in the same sweep, AVX2
+loses 3% and scalar 2% — so one ISA is memory-bound and another compute-bound on
+identical data.
+
+The lesson is that operational intensity is a property of the workload *and the
+implementation*, not the workload alone. Widening the datapath moves you along
+the roofline toward the ridge, which is the same thing as saying a faster kernel
+is easier to starve.
 
 What this means for planning:
 
 - **Goal 1 (integer SIMD throughput) and a CPU memory-side crossover want
-  opposite things.** Goal 1 wants high operational intensity — that is what
-  isolates the ALUs. A memory crossover needs intensity low enough to reach the
-  ridge. One hash function cannot serve both well.
+  opposite things**, and the Zen 5 result sharpens this rather than softening
+  it. Goal 1 wants high operational intensity — that is what isolates the ALUs.
+  A memory crossover needs intensity low enough to reach the ridge. It took a
+  512-bit datapath to drag this workload down to the ridge at all, and at that
+  point the number measures the memory system rather than the ALUs. One hash
+  function still cannot serve both goals well.
 - If a CPU compute-vs-memory crossover is wanted anyway, it needs a
   deliberately bandwidth-hungry companion kernel — closer to BabelStream or
   mixbench — not a bigger corpus.
