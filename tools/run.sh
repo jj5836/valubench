@@ -245,8 +245,11 @@ if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
     note "  sudo systemctl disable --now unattended-upgrades"
 fi
 
-# Energy needs the counters readable; harmless if they are not there.
-sudo chmod a+r /sys/class/powercap/*/energy_uj 2>/dev/null || true
+# Energy needs the counters readable. -n is not optional: plain sudo prompts for
+# a password where one is required, and with stderr discarded that is a silent
+# hang before the capture has measured anything. Passwordless sudo is the norm on
+# a rented instance and not the norm anywhere else.
+sudo -n chmod a+r /sys/class/powercap/*/energy_uj 2>/dev/null || true
 HAVE_RAPL=0
 for e in /sys/class/powercap/intel-rapl:*/energy_uj \
          /sys/class/powercap/amd-rapl:*/energy_uj; do
