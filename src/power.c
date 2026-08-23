@@ -1,0 +1,446 @@
+/*
+ * power.c -- energy measurement from powercap, DRM hwmon and NVML.
+ *
+ * This is free and unencumbered software released into the public domain.
+ * See LICENSE.
+ *
+ * See power.h for what is measured and why. Everything here is optional and
+ * failure is never fatal: a machine that exposes no energy counters simply
+ * reports throughput without energy, and says which source was missing.
+ */
+
+#define _GNU_SOURCE
+
+#include "power.h"
+
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+enum {
+    SRC_POWERCAP,        /* energy_uj, microjoules, wraps at max_energy_range */
+    SRC_HWMON_ENERGY,    /* energy1_input, microjoules */
+    SRC_HWMON_POWER,     /* power1_average, microwatts -- integrated over time */
+    SRC_NVML             /* millijoules since driver load */
+};
+
+/* ---- NVML, loaded the same way as OpenCL ------------------------------- */
+
+typedef int (*nvml_fn_init)(void);
+typedef int (*nvml_fn_shutdown)(void);
+typedef int (*nvml_fn_count)(unsigned *);
+typedef int (*nvml_fn_handle)(unsigned, void **);
+typedef int (*nvml_fn_energy)(void *, unsigned long long *);
+typedef int (*nvml_fn_power)(void *, unsigned *);
+typedef int (*nvml_fn_name)(void *, char *, unsigned);
+
+static struct {
+    void *lib;
+    int   ready;
+    nvml_fn_shutdown Shutdown;
+    nvml_fn_count    Count;
+    nvml_fn_handle   Handle;
+    nvml_fn_energy   Energy;
+    nvml_fn_power    Power;
+    nvml_fn_name     Name;
+    void *dev[VB_POWER_MAX_SRC];
+} g_nvml;
+
+static int nvml_start(void)
+{
+    if (g_nvml.ready)
+        return 1;
+    if (g_nvml.lib)
+        return 0;               /* tried and failed */
+
+    g_nvml.lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!g_nvml.lib)
+        g_nvml.lib = dlopen("libnvidia-ml.so", RTLD_NOW | RTLD_LOCAL);
+    if (!g_nvml.lib)
+        return 0;
+
+    /* ISO C has no object-to-function pointer conversion; POSIX dlsym requires
+       it. Going through a void* slot is the portable idiom. */
+    nvml_fn_init init = NULL;
+    *(void **) (&init) = dlsym(g_nvml.lib, "nvmlInit_v2");
+    if (!init)
+        *(void **) (&init) = dlsym(g_nvml.lib, "nvmlInit");
+
+    *(void **) (&g_nvml.Shutdown) = dlsym(g_nvml.lib, "nvmlShutdown");
+    *(void **) (&g_nvml.Count)    = dlsym(g_nvml.lib, "nvmlDeviceGetCount_v2");
+    if (!g_nvml.Count)
+        *(void **) (&g_nvml.Count) = dlsym(g_nvml.lib, "nvmlDeviceGetCount");
+    *(void **) (&g_nvml.Handle)   = dlsym(g_nvml.lib,
+                                          "nvmlDeviceGetHandleByIndex_v2");
+    if (!g_nvml.Handle)
+        *(void **) (&g_nvml.Handle) = dlsym(g_nvml.lib,
+                                            "nvmlDeviceGetHandleByIndex");
+    /* Volta and later. Preferred: a real counter beats sampling wattage. */
+    *(void **) (&g_nvml.Energy) = dlsym(g_nvml.lib,
+                                        "nvmlDeviceGetTotalEnergyConsumption");
+    *(void **) (&g_nvml.Power)  = dlsym(g_nvml.lib, "nvmlDeviceGetPowerUsage");
+    *(void **) (&g_nvml.Name)   = dlsym(g_nvml.lib, "nvmlDeviceGetName");
+
+    if (!init || !g_nvml.Count || !g_nvml.Handle || init() != 0)
+        return 0;
+
+    g_nvml.ready = 1;
+    return 1;
+}
+
+/* ---- small helpers ------------------------------------------------------ */
+
+static int read_u64(int fd, uint64_t *out)
+{
+    char buf[64];
+    ssize_t n;
+
+    if (lseek(fd, 0, SEEK_SET) < 0)
+        return 0;
+    n = read(fd, buf, sizeof buf - 1);
+    if (n <= 0)
+        return 0;
+    buf[n] = '\0';
+    *out = strtoull(buf, NULL, 10);
+    return 1;
+}
+
+static int read_u64_path(const char *path, uint64_t *out)
+{
+    int fd = open(path, O_RDONLY);
+    int ok;
+
+    if (fd < 0)
+        return 0;
+    ok = read_u64(fd, out);
+    close(fd);
+    return ok;
+}
+
+static void read_str_path(const char *path, char *out, size_t n)
+{
+    int fd = open(path, O_RDONLY);
+    ssize_t got;
+
+    out[0] = '\0';
+    if (fd < 0)
+        return;
+    got = read(fd, out, n - 1);
+    close(fd);
+    if (got <= 0) {
+        out[0] = '\0';
+        return;
+    }
+    out[got] = '\0';
+    out[strcspn(out, "\r\n")] = '\0';
+}
+
+static vb_power_src *add_src(vb_power *p)
+{
+    if (p->n >= VB_POWER_MAX_SRC)
+        return NULL;
+    vb_power_src *s = &p->src[p->n++];
+    memset(s, 0, sizeof *s);
+    s->fd = -1;
+    return s;
+}
+
+/* ---- discovery ---------------------------------------------------------- */
+
+static void scan_powercap(vb_power *p, int *denied)
+{
+    DIR *d = opendir("/sys/class/powercap");
+    struct dirent *e;
+
+    if (!d)
+        return;
+
+    while ((e = readdir(d)) != NULL) {
+        char path[512], name[64];
+
+        /* The powercap RAPL driver registers its control type as "intel-rapl"
+           on AMD parts too, so that prefix has covered both so far. "amd-rapl"
+           is accepted as well because this path has never run on an AMD part,
+           and a naming difference would present as silently absent energy
+           rather than as an error -- the worst failure mode for a reading you
+           are paying by the hour to take. */
+        if (strncmp(e->d_name, "intel-rapl:", 11) != 0 &&
+            strncmp(e->d_name, "amd-rapl:", 9) != 0)
+            continue;
+
+        snprintf(path, sizeof path, "/sys/class/powercap/%s/name", e->d_name);
+        read_str_path(path, name, sizeof name);
+        if (!name[0])
+            continue;
+
+        snprintf(path, sizeof path, "/sys/class/powercap/%s/energy_uj",
+                 e->d_name);
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) {
+            *denied = 1;
+            continue;
+        }
+
+        vb_power_src *s = add_src(p);
+        if (!s) {
+            close(fd);
+            break;
+        }
+
+        s->kind = SRC_POWERCAP;
+        s->fd = fd;
+
+        snprintf(path, sizeof path,
+                 "/sys/class/powercap/%s/max_energy_range_uj", e->d_name);
+        if (!read_u64_path(path, &s->wrap_uj) || s->wrap_uj == 0)
+            s->wrap_uj = (uint64_t) 1 << 32;
+
+        /*
+         * On client Intel parts the `uncore` domain is the integrated GPU, so
+         * it is the device reading on a machine with no discrete card.
+         */
+        if (strstr(name, "package")) {
+            s->scope = VB_PWR_CPU_PACKAGE;
+            snprintf(s->name, sizeof s->name, "RAPL %s", name);
+        } else if (strstr(name, "core") && !strstr(name, "uncore")) {
+            s->scope = VB_PWR_CPU_CORES;
+            snprintf(s->name, sizeof s->name, "RAPL %s", name);
+        } else if (strstr(name, "uncore")) {
+            s->scope = VB_PWR_GPU;
+            snprintf(s->name, sizeof s->name, "RAPL uncore (integrated GPU)");
+        } else {
+            s->scope = VB_PWR_OTHER;
+            snprintf(s->name, sizeof s->name, "RAPL %s", name);
+        }
+    }
+
+    closedir(d);
+}
+
+static void scan_drm_hwmon(vb_power *p)
+{
+    for (int card = 0; card < 8; card++) {
+        char base[256];
+        DIR *d;
+        struct dirent *e;
+
+        snprintf(base, sizeof base, "/sys/class/drm/card%d/device/hwmon", card);
+        d = opendir(base);
+        if (!d)
+            continue;
+
+        while ((e = readdir(d)) != NULL) {
+            char path[600], hname[32];
+
+            if (strncmp(e->d_name, "hwmon", 5) != 0)
+                continue;
+
+            snprintf(path, sizeof path, "%s/%s/name", base, e->d_name);
+            read_str_path(path, hname, sizeof hname);
+
+            /* Energy counter preferred; average power is a fallback. */
+            snprintf(path, sizeof path, "%s/%s/energy1_input", base, e->d_name);
+            int fd = open(path, O_RDONLY);
+            int kind = SRC_HWMON_ENERGY;
+
+            if (fd < 0) {
+                snprintf(path, sizeof path, "%s/%s/power1_average", base,
+                         e->d_name);
+                fd = open(path, O_RDONLY);
+                kind = SRC_HWMON_POWER;
+            }
+            if (fd < 0)
+                continue;
+
+            vb_power_src *s = add_src(p);
+            if (!s) {
+                close(fd);
+                break;
+            }
+            s->kind = kind;
+            s->fd = fd;
+            s->scope = VB_PWR_GPU;
+            snprintf(s->name, sizeof s->name, "card%d %s%s", card,
+                     hname[0] ? hname : "hwmon",
+                     kind == SRC_HWMON_POWER ? " (avg power)" : "");
+        }
+        closedir(d);
+    }
+}
+
+static void scan_nvml(vb_power *p)
+{
+    unsigned count = 0;
+
+    if (!nvml_start())
+        return;
+    if (g_nvml.Count(&count) != 0)
+        return;
+
+    for (unsigned i = 0; i < count && i < VB_POWER_MAX_SRC; i++) {
+        void *h = NULL;
+        if (g_nvml.Handle(i, &h) != 0 || !h)
+            continue;
+        if (!g_nvml.Energy && !g_nvml.Power)
+            continue;
+
+        vb_power_src *s = add_src(p);
+        if (!s)
+            break;
+
+        s->kind = SRC_NVML;
+        s->scope = VB_PWR_GPU;
+        s->nvml_index = i;
+        g_nvml.dev[i] = h;
+
+        char nm[80] = "";
+        if (g_nvml.Name)
+            g_nvml.Name(h, nm, sizeof nm - 1);
+        snprintf(s->name, sizeof s->name, "NVML %s%s",
+                 nm[0] ? nm : "GPU",
+                 g_nvml.Energy ? "" : " (avg power)");
+    }
+}
+
+void vb_power_open(vb_power *p)
+{
+    int denied = 0;
+
+    memset(p, 0, sizeof *p);
+
+    scan_powercap(p, &denied);
+    scan_drm_hwmon(p);
+    scan_nvml(p);
+
+    if (p->n == 0) {
+        if (denied)
+            snprintf(p->unavailable, sizeof p->unavailable,
+                     "RAPL counters exist but are not readable by this user; "
+                     "they are root-only on most distributions, as hardening "
+                     "against the PLATYPUS side channel. Either run as root, "
+                     "or: sudo chmod a+r "
+                     "/sys/class/powercap/intel-rapl:*/energy_uj  (note sysfs "
+                     "does not support ACLs, so setfacl cannot be used, and "
+                     "the mode resets on reboot unless set from a udev rule).");
+        else
+            snprintf(p->unavailable, sizeof p->unavailable,
+                     "no energy counters found (no RAPL, no DRM hwmon power "
+                     "node, no NVML)");
+    }
+}
+
+/*
+ * Release handles but keep the measurements. The result is reported after the
+ * benchmark has finished with the sources, so clearing the source list here
+ * would silently drop the energy block from the output.
+ */
+void vb_power_close(vb_power *p)
+{
+    for (int i = 0; i < p->n; i++) {
+        if (p->src[i].fd >= 0)
+            close(p->src[i].fd);
+        p->src[i].fd = -1;
+    }
+
+    if (g_nvml.ready && g_nvml.Shutdown)
+        g_nvml.Shutdown();
+    if (g_nvml.lib)
+        dlclose(g_nvml.lib);
+    memset(&g_nvml, 0, sizeof g_nvml);
+}
+
+/* ---- sampling ----------------------------------------------------------- */
+
+static int sample(vb_power_src *s, uint64_t *out)
+{
+    switch (s->kind) {
+    case SRC_POWERCAP:
+    case SRC_HWMON_ENERGY:
+    case SRC_HWMON_POWER:
+        return read_u64(s->fd, out);
+
+    case SRC_NVML: {
+        if (g_nvml.Energy) {
+            unsigned long long mj = 0;
+            if (g_nvml.Energy(g_nvml.dev[s->nvml_index], &mj) != 0)
+                return 0;
+            *out = (uint64_t) mj * 1000u;       /* mJ -> uJ */
+            return 1;
+        }
+        if (g_nvml.Power) {
+            unsigned mw = 0;
+            if (g_nvml.Power(g_nvml.dev[s->nvml_index], &mw) != 0)
+                return 0;
+            *out = (uint64_t) mw * 1000u;       /* mW -> uW */
+            return 1;
+        }
+        return 0;
+    }
+    default:
+        return 0;
+    }
+}
+
+void vb_power_begin(vb_power *p)
+{
+    for (int i = 0; i < p->n; i++) {
+        vb_power_src *s = &p->src[i];
+        s->valid = sample(s, &s->start_uj);
+        s->joules = 0.0;
+    }
+}
+
+void vb_power_end(vb_power *p, double seconds)
+{
+    for (int i = 0; i < p->n; i++) {
+        vb_power_src *s = &p->src[i];
+        uint64_t now = 0;
+
+        if (!s->valid || !sample(s, &now)) {
+            s->valid = 0;
+            continue;
+        }
+
+        if (s->kind == SRC_HWMON_POWER ||
+            (s->kind == SRC_NVML && !g_nvml.Energy)) {
+            /* Instantaneous wattage: average the two readings and integrate.
+               Less trustworthy than a counter, which is why the source name
+               says so. */
+            double w = ((double) s->start_uj + (double) now) / 2.0 / 1e6;
+            s->joules = w * seconds;
+        } else {
+            uint64_t delta = (now >= s->start_uj)
+                           ? now - s->start_uj
+                           : (s->wrap_uj - s->start_uj) + now;
+            s->joules = (double) delta / 1e6;
+        }
+    }
+}
+
+double vb_power_scope_joules(const vb_power *p, vb_power_scope scope)
+{
+    double total = 0.0;
+    int any = 0;
+
+    for (int i = 0; i < p->n; i++) {
+        if (p->src[i].scope == scope && p->src[i].valid) {
+            total += p->src[i].joules;
+            any = 1;
+        }
+    }
+    return any ? total : -1.0;
+}
+
+const char *vb_power_scope_name(vb_power_scope s)
+{
+    switch (s) {
+    case VB_PWR_CPU_PACKAGE: return "cpu_package";
+    case VB_PWR_CPU_CORES:   return "cpu_cores";
+    case VB_PWR_GPU:         return "gpu";
+    default:                 return "other";
+    }
+}

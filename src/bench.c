@@ -1,0 +1,934 @@
+/*
+ * bench.c -- measurement harness: validation, autotune, threading, timing.
+ *
+ * This is free and unencumbered software released into the public domain.
+ * See LICENSE.
+ *
+ *
+ * THE VERIFICATION PROTOCOL
+ * =========================
+ *
+ * Two layers, because they catch different failures (docs/research.md 2.6).
+ *
+ * 1. Absolute correctness, before timing. Every candidate kernel hashes the
+ *    verified batch and its checksum is compared against the scalar reference,
+ *    which is itself checked against the RFC 1321 vectors and coreutils md5sum.
+ *    A kernel that fails here is excluded; if the selected kernel fails, the run
+ *    aborts. This catches miscompilation, bad intrinsics, and broken hardware.
+ *
+ * 2. Continuous correctness, during timing. The timed loop re-hashes that same
+ *    verified batch and compares on EVERY iteration. A startup-only self-test
+ *    cannot catch a CPU or GPU that is correct when cold and wrong under
+ *    sustained load, which is the failure mode that actually matters when
+ *    benchmarking near thermal or power limits.
+ *
+ * Because the timed range is the range the reference verified, layer 2 checks
+ * against an absolutely-known value, not merely against itself.
+ *
+ *
+ * SIZING THE BATCH
+ * ================
+ *
+ * The batch is chosen to hit a target working set in bytes, not a fixed message
+ * count. That is what makes the memory axis controllable: with message length
+ * fixed, sweeping the working set from tens of kilobytes to hundreds of
+ * megabytes walks the result from L1-resident to DRAM-bound, which is the
+ * roofline measurement the second goal asks for.
+ *
+ * The count is rounded to a multiple of VB_BATCH_LCM so every kernel's group
+ * size divides it and the checksum covers identical messages regardless of
+ * which kernel ran.
+ *
+ *
+ * THREADING
+ * =========
+ *
+ * The verified batch is partitioned across threads, so one "rep" is all threads
+ * together hashing the batch exactly once. Each thread holds the reference
+ * checksum for its own slice, computed once at setup, and verifies its own
+ * partial result every rep -- no synchronisation in the hot path.
+ *
+ * XOR is associative and commutative, so XORing the partials reproduces the
+ * single-threaded value. The reported checksum is therefore identical at any
+ * thread count, which keeps it usable as a cross-machine fingerprint rather
+ * than merely a self-check.
+ *
+ * Workers are persistent and synchronised with two barriers per rep-batch, so
+ * thread creation never lands inside a timed region, and the barrier cost is
+ * amortised over every rep in that batch rather than paid per rep.
+ *
+ * The driving thread is itself worker 0 and runs a slice inline. An earlier
+ * version had it merely wait, which left N workers plus the driver competing
+ * for N cores: one core ran two runnable threads, whichever core that was
+ * varied per sample, and the coefficient of variation exceeded 25%. Having the
+ * driver do real work makes the runnable-thread count exactly match the core
+ * count.
+ */
+
+#define _GNU_SOURCE
+
+#include "bench.h"
+#include "valubench.h"
+#include "opencl_backend.h"
+#include "power.h"
+
+#include <pthread.h>
+#include <sched.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+void vb_config_defaults(vb_config *cfg)
+{
+    cfg->target_ms      = 100;
+    cfg->n_samples      = 10;
+    cfg->warmup_ms      = 300;
+    cfg->threads        = 0;    /* one per online CPU */
+    cfg->iterations     = 1;
+    cfg->message_bytes  = VB_DEFAULT_MSG_BYTES;
+    cfg->alg            = vb_algorithm_by_id(VB_ALG_MD5);
+    cfg->working_set_kb = 1024; /* 1 MiB: L2-resident on most machines */
+    cfg->device_count   = 0;   /* every device */
+    cfg->transfer       = VB_TRANSFER_RESIDENT;
+    cfg->where          = VB_WHERE_ANY;
+    cfg->cov_threshold  = 3.5;  /* same spirit as the PTS default, RESEARCH 1.2 */
+    cfg->pin_cpu        = 1;
+    cfg->force_kernel   = NULL;
+}
+
+uint64_t vb_now_ns(void)
+{
+    struct timespec ts;
+    /* CLOCK_MONOTONIC_RAW is not slewed by NTP, unlike CLOCK_MONOTONIC. */
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    return (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
+}
+
+unsigned vb_online_cpus(void)
+{
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1)
+        return 1;
+    if (n > VB_MAX_THREADS)
+        n = VB_MAX_THREADS;
+    return (unsigned) n;
+}
+
+int vb_batch_divides(const vb_kernel *k)
+{
+    return (VB_BATCH_LCM % (k->lanes * k->streams)) == 0;
+}
+
+uint64_t vb_batch_messages(const vb_config *cfg)
+{
+    uint64_t padded = (uint64_t) vb_alg_blocks_for(cfg->alg, cfg->message_bytes)
+                    * cfg->alg->block_bytes;
+    uint64_t target = (uint64_t) cfg->working_set_kb * 1024u;
+    uint64_t n = (padded ? target / padded : 0);
+
+    n = (n / VB_BATCH_LCM) * VB_BATCH_LCM;
+    if (n < VB_BATCH_LCM)
+        n = VB_BATCH_LCM;       /* smallest count every kernel can divide */
+    return n;
+}
+
+uint64_t vb_working_set_bytes(const vb_config *cfg)
+{
+    return vb_batch_messages(cfg)
+         * (uint64_t) vb_alg_blocks_for(cfg->alg, cfg->message_bytes)
+         * cfg->alg->block_bytes;
+}
+
+/* ---- worker pool -------------------------------------------------------- */
+
+typedef struct vb_pool vb_pool;
+
+typedef struct {
+    pthread_t  tid;
+    vb_pool   *pool;
+    int        cpu;             /* -1 = do not pin */
+
+    const void *corpus;         /* start of this slice within the corpus */
+    uint64_t   groups;          /* groups in this slice */
+    uint64_t   expected[VB_MAX_DIGEST_WORDS];  /* reference for this slice */
+
+    int        ok;              /* 0 if verification failed */
+} vb_worker;
+
+struct vb_pool {
+    unsigned          n;
+    vb_worker        *w;
+    const vb_kernel  *k;
+    uint32_t          blocks;
+    uint32_t          iterations;
+    uint64_t          reps;     /* set by the driver before each release */
+    int               stop;
+    pthread_barrier_t start_bar;
+    pthread_barrier_t done_bar;
+};
+
+static void pin_self(int cpu)
+{
+    if (cpu < 0)
+        return;
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET((unsigned) cpu, &set);
+    pthread_setaffinity_np(pthread_self(), sizeof set, &set);
+}
+
+/* Hash this worker's slice `reps` times, verifying its own partial checksum. */
+static void run_slice(vb_pool *p, vb_worker *w)
+{
+    uint64_t cs[VB_MAX_DIGEST_WORDS];
+    int ok = 1;
+
+    for (uint64_t r = 0; r < p->reps && ok; r++) {
+        p->k->fn(w->corpus, w->groups, p->blocks, p->iterations, cs);
+        /* Each thread checks its own slice against its own reference value, so
+           verification needs no cross-thread synchronisation. */
+        if (memcmp(cs, w->expected, sizeof cs) != 0)
+            ok = 0;
+    }
+
+    w->ok = ok;
+}
+
+static void *worker_main(void *arg)
+{
+    vb_worker *w = (vb_worker *) arg;
+    vb_pool *p = w->pool;
+
+    pin_self(w->cpu);
+
+    for (;;) {
+        pthread_barrier_wait(&p->start_bar);
+
+        if (p->stop)
+            break;
+
+        run_slice(p, w);
+        pthread_barrier_wait(&p->done_bar);
+    }
+
+    return NULL;
+}
+
+static void pool_destroy(vb_pool *p)
+{
+    if (!p->w)
+        return;
+
+    p->stop = 1;
+    pthread_barrier_wait(&p->start_bar);
+
+    for (unsigned i = 1; i < p->n; i++)
+        pthread_join(p->w[i].tid, NULL);
+
+    pthread_barrier_destroy(&p->start_bar);
+    pthread_barrier_destroy(&p->done_bar);
+    free(p->w);
+    p->w = NULL;
+}
+
+/*
+ * Partition the batch across threads and compute each slice's reference
+ * checksum. Returns 0 on success.
+ */
+static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
+                       const vb_corpus *corpus, unsigned threads)
+{
+    unsigned group = k->lanes * k->streams;
+    uint64_t total_groups = corpus->n_messages / group;
+    size_t slot_words = vb_corpus_slot_words(corpus);
+
+    if (threads > total_groups)
+        threads = (unsigned) total_groups;   /* never leave a thread idle */
+    if (threads < 1)
+        threads = 1;
+
+    memset(p, 0, sizeof *p);
+    p->n = threads;
+    p->k = k;
+    p->blocks = corpus->blocks;
+    p->iterations = cfg->iterations;
+
+    p->w = calloc(threads, sizeof *p->w);
+    if (!p->w)
+        return -1;
+
+    uint64_t base = total_groups / threads;
+    uint64_t extra = total_groups % threads;
+    uint64_t off = 0;
+
+    for (unsigned i = 0; i < threads; i++) {
+        vb_worker *w = &p->w[i];
+        uint64_t first_msg = off * group;
+
+        w->pool = p;
+        w->cpu = cfg->pin_cpu ? (int) (i % vb_online_cpus()) : -1;
+        w->groups = base + (i < extra ? 1 : 0);
+        /* A corpus slot holds `lanes` messages, so scale the message offset.
+           Elements are alg->word_bytes wide, hence the byte arithmetic. */
+        w->corpus = (const unsigned char *) corpus->words
+                  + (first_msg / corpus->lanes) * slot_words
+                    * corpus->alg->word_bytes;
+
+        vb_reference_checksum(cfg->alg,
+                              corpus->start_index + (uint32_t) first_msg,
+                              w->groups * group, cfg->message_bytes,
+                              cfg->iterations, w->expected);
+        off += w->groups;
+    }
+
+    /* Worker 0 is the driving thread, so only threads-1 are spawned and the
+       barriers count `threads` participants in total. */
+    pthread_barrier_init(&p->start_bar, NULL, threads);
+    pthread_barrier_init(&p->done_bar, NULL, threads);
+
+    pin_self(p->w[0].cpu);
+
+    for (unsigned i = 1; i < threads; i++) {
+        if (pthread_create(&p->w[i].tid, NULL, worker_main, &p->w[i]) != 0) {
+            /* Rebuild the barriers around the workers that actually started. */
+            p->n = i;
+            pthread_barrier_destroy(&p->start_bar);
+            pthread_barrier_destroy(&p->done_bar);
+            pthread_barrier_init(&p->start_bar, NULL, i);
+            pthread_barrier_init(&p->done_bar, NULL, i);
+            break;
+        }
+    }
+
+    return 0;
+}
+
+/* Run `reps` batches across the pool. Returns elapsed ns, 0 on verify failure. */
+static uint64_t pool_run(vb_pool *p, uint64_t reps, int *ok)
+{
+    p->reps = reps;
+
+    uint64_t t0 = vb_now_ns();
+    pthread_barrier_wait(&p->start_bar);
+    run_slice(p, &p->w[0]);          /* the driver is worker 0 */
+    pthread_barrier_wait(&p->done_bar);
+    uint64_t elapsed = vb_now_ns() - t0;
+
+    *ok = 1;
+    for (unsigned i = 0; i < p->n; i++)
+        if (!p->w[i].ok)
+            *ok = 0;
+
+    return *ok ? elapsed : 0;
+}
+
+/* ---- validation --------------------------------------------------------- */
+
+int vb_validate_kernel(const vb_kernel *k, const vb_config *cfg,
+                       const vb_corpus *corpus,
+                       uint64_t checksum_out[VB_MAX_DIGEST_WORDS],
+                       uint64_t expected[VB_MAX_DIGEST_WORDS])
+{
+    unsigned group = k->lanes * k->streams;
+
+    if (!vb_batch_divides(k) || (corpus->n_messages % group) != 0)
+        return 0;
+
+    vb_reference_checksum(cfg->alg, corpus->start_index, corpus->n_messages,
+                          cfg->message_bytes, cfg->iterations, expected);
+    k->fn(corpus->words, corpus->n_messages / group, corpus->blocks,
+          cfg->iterations, checksum_out);
+
+    return memcmp(checksum_out, expected,
+                  VB_MAX_DIGEST_WORDS * sizeof(uint64_t)) == 0;
+}
+
+/* ---- statistics --------------------------------------------------------- */
+
+static int cmp_double(const void *a, const void *b)
+{
+    double x = *(const double *) a, y = *(const double *) b;
+    return (x > y) - (x < y);
+}
+
+/* Newton's method, so the benchmark does not link libm for one square root. */
+static double vb_sqrt(double x)
+{
+    if (x <= 0.0)
+        return 0.0;
+
+    double g = x, prev = 0.0;
+    for (int i = 0; i < 64 && g != prev; i++) {
+        prev = g;
+        g = 0.5 * (g + x / g);
+    }
+    return g;
+}
+
+static void compute_stats(vb_result *r)
+{
+    double sorted[VB_MAX_SAMPLES];
+    memcpy(sorted, r->sample_hps, r->n_samples * sizeof(double));
+    qsort(sorted, r->n_samples, sizeof(double), cmp_double);
+
+    r->min = sorted[0];
+    r->max = sorted[r->n_samples - 1];
+    r->median = (r->n_samples % 2)
+        ? sorted[r->n_samples / 2]
+        : 0.5 * (sorted[r->n_samples / 2 - 1] + sorted[r->n_samples / 2]);
+
+    double sum = 0.0;
+    for (unsigned i = 0; i < r->n_samples; i++)
+        sum += r->sample_hps[i];
+    r->mean = sum / r->n_samples;
+
+    double var = 0.0;
+    for (unsigned i = 0; i < r->n_samples; i++) {
+        double d = r->sample_hps[i] - r->mean;
+        var += d * d;
+    }
+    /* Sample standard deviation; n-1 because these are samples, not the
+       population of all possible runs. */
+    r->stddev = (r->n_samples > 1) ? vb_sqrt(var / (r->n_samples - 1)) : 0.0;
+    r->cov = (r->mean > 0.0) ? 100.0 * r->stddev / r->mean : 0.0;
+}
+
+/*
+ * Choose a repetition count that makes one timed iteration last ~target_ms.
+ *
+ * Two things this has to get right, both learned the hard way.
+ *
+ * The first probe must be discarded. Releasing the barrier wakes sleeping
+ * worker threads, and that wake-up cost lands entirely in the first
+ * measurement. Extrapolating from it calibrated against overhead rather than
+ * work: a four-thread run asked for 100 ms samples and produced 5 ms ones,
+ * a 20x undershoot that made every CPU result far shorter than requested.
+ *
+ * And the probe must get close to the target before extrapolating. Scaling up
+ * from a 2 ms measurement multiplies whatever fixed overhead it contained by
+ * fifty. Growing until the probe is within 4x of the target bounds that error.
+ */
+static uint64_t calibrate_reps(vb_pool *p, unsigned target_ms)
+{
+    const double target_ns = (double) target_ms * 1e6;
+    const double floor_ns = target_ns / 4.0;
+    uint64_t reps = 1;
+    int ok;
+
+    pool_run(p, 1, &ok);                /* warm: pay the thread wake-up once */
+    if (!ok)
+        return 0;
+
+    for (;;) {
+        uint64_t ns = pool_run(p, reps, &ok);
+        if (!ok)
+            return 0;
+
+        if ((double) ns >= floor_ns) {
+            double want = (double) reps * (target_ns / (double) ns);
+            return (uint64_t) (want < 1.0 ? 1.0 : want);
+        }
+
+        /* Grow toward the floor directly rather than in blind 4x steps, but
+           never by less than 2x, so this always terminates. */
+        double grow = ns ? floor_ns / (double) ns : 4.0;
+        if (grow < 2.0)  grow = 2.0;
+        if (grow > 64.0) grow = 64.0;
+
+        uint64_t next = (uint64_t) ((double) reps * grow);
+        reps = (next > reps) ? next : reps * 2;
+
+        if (reps > (1ull << 40))
+            return reps;                /* pathologically fast; stop scaling */
+    }
+}
+
+/* ---- measurement -------------------------------------------------------- */
+
+/* ---- device measurement ------------------------------------------------- */
+
+/*
+ * Device kernels bypass the thread pool entirely: the corpus is uploaded once
+ * and one host thread drives the queue. Threads-in-flight is a device-side
+ * property here (work-items), not a host one, so `threads` is reported as 1.
+ */
+static int measure_device(const vb_kernel *k, const vb_config *cfg,
+                          const vb_corpus *corpus, vb_result *out)
+{
+    vb_ocl_device devs[VB_OCL_MAX_DEVICES];
+    int n_avail = vb_ocl_devices(devs, VB_OCL_MAX_DEVICES);
+    int idx[VB_OCL_MAX_DEVICES];
+    int n_use = 0;
+
+    if (n_avail <= 0) {
+        out->verified = 0;
+        return 1;
+    }
+
+    /* Which devices: all of them, or the ones named by --device. */
+    if (cfg->device_count <= 0) {
+        for (int i = 0; i < n_avail; i++)
+            idx[n_use++] = i;
+    } else {
+        for (int i = 0; i < cfg->device_count; i++) {
+            if (cfg->device_index[i] < 0 || cfg->device_index[i] >= n_avail) {
+                snprintf(out->device_error, sizeof out->device_error,
+                         "no OpenCL device %d (there are %d)",
+                         cfg->device_index[i], n_avail);
+                out->verified = 0;
+                return 1;
+            }
+            idx[n_use++] = cfg->device_index[i];
+        }
+    }
+
+    unsigned group = k->lanes * k->streams;
+    uint64_t total_groups = corpus->n_messages / group;
+
+    if ((uint64_t) n_use > total_groups)
+        n_use = (int) total_groups;     /* never leave a device with no work */
+
+    vb_ocl_ctx ctx[VB_OCL_MAX_DEVICES];
+    uint64_t expect[VB_OCL_MAX_DEVICES][VB_MAX_DIGEST_WORDS];
+    int        n_init = 0;
+
+    /*
+     * Split the corpus into contiguous group ranges, one per device, mirroring
+     * the CPU thread pool. Each device verifies its own slice against its own
+     * reference value, and the XOR of the slices reproduces the single-device
+     * checksum.
+     *
+     * The split is equal, not proportional to device speed. On a heterogeneous
+     * set the aggregate is therefore paced by the slowest device -- a known
+     * limitation, stated here rather than silently averaged away.
+     */
+    uint64_t base = total_groups / (uint64_t) n_use;
+    uint64_t extra = total_groups % (uint64_t) n_use;
+    uint64_t off = 0;
+
+    for (int i = 0; i < n_use; i++) {
+        uint64_t mine = base + ((uint64_t) i < extra ? 1 : 0);
+
+        if (vb_ocl_ctx_init(&ctx[i], &devs[idx[i]], corpus, k->streams,
+                            off, mine) != 0) {
+            snprintf(out->device_error, sizeof out->device_error, "%s",
+                     ctx[i].error);
+            goto fail_init;
+        }
+        n_init++;
+        vb_ocl_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM);
+
+        vb_reference_checksum(cfg->alg,
+                              corpus->start_index + (uint32_t) (off * group),
+                              mine * group, cfg->message_bytes,
+                              cfg->iterations, expect[i]);
+        off += mine;
+    }
+
+    /* Provenance: name the first device, and say how many are in play. */
+    snprintf(out->device_name, sizeof out->device_name, "%s", ctx[0].dev.name);
+    snprintf(out->device_vendor, sizeof out->device_vendor, "%s",
+             ctx[0].dev.vendor);
+    snprintf(out->device_driver, sizeof out->device_driver, "%s",
+             ctx[0].dev.driver_version);
+    out->device_count = n_use;
+    out->threads = 1;
+
+    /* ---- one pass over every device, concurrently ---- */
+    uint64_t got[VB_MAX_DIGEST_WORDS];
+    #define VB_DEV_PASS(ok_label)                                          \
+        do {                                                               \
+            for (int i = 0; i < n_use; i++)                                \
+                if (vb_ocl_ctx_enqueue(&ctx[i], cfg->iterations) != 0)     \
+                    goto ok_label;                                         \
+            for (int i = 0; i < n_use; i++) {                              \
+                uint64_t part[VB_MAX_DIGEST_WORDS];                                          \
+                if (vb_ocl_ctx_collect(&ctx[i], part) != 0)                \
+                    goto ok_label;                                         \
+                if (memcmp(part, expect[i], sizeof part) != 0)             \
+                    mismatch = 1;                                          \
+                for (int w = 0; w < VB_MAX_DIGEST_WORDS; w++) got[w] ^= part[w];             \
+            }                                                              \
+        } while (0)
+
+    int mismatch = 0;
+    memset(got, 0, sizeof got);
+    VB_DEV_PASS(fail_run);
+    if (mismatch) {
+        memcpy(out->checksum, got, sizeof got);
+        goto fail_run;
+    }
+
+    uint64_t expected_all[VB_MAX_DIGEST_WORDS] = { 0 };
+    for (int i = 0; i < n_use; i++)
+        for (int w = 0; w < VB_MAX_DIGEST_WORDS; w++)
+            expected_all[w] ^= expect[i][w];
+    memcpy(out->checksum, expected_all, sizeof expected_all);
+
+    /* Calibrate reps so a timed sample lasts roughly target_ms, growing until
+       the probe is within 4x of the target so fixed costs are not multiplied
+       up by the extrapolation. Launches are already ~20 ms by construction, so
+       this usually settles immediately. */
+    const double target_ns = (double) cfg->target_ms * 1e6;
+    const double floor_ns = target_ns / 4.0;
+    uint64_t reps = 1;
+
+    for (;;) {
+        uint64_t t0 = vb_now_ns();
+        for (uint64_t r = 0; r < reps; r++) {
+            memset(got, 0, sizeof got);
+            VB_DEV_PASS(fail_run);
+        }
+        uint64_t ns = vb_now_ns() - t0;
+
+        if ((double) ns >= floor_ns) {
+            double want = (double) reps * (target_ns / (double) ns);
+            reps = (uint64_t) (want < 1.0 ? 1.0 : want);
+            break;
+        }
+
+        double grow = ns ? floor_ns / (double) ns : 4.0;
+        if (grow < 2.0)  grow = 2.0;
+        if (grow > 64.0) grow = 64.0;
+        uint64_t next = (uint64_t) ((double) reps * grow);
+        reps = (next > reps) ? next : reps * 2;
+
+        if (reps > (1ull << 32))
+            break;
+    }
+
+    uint64_t warm_end = vb_now_ns() + (uint64_t) cfg->warmup_ms * 1000000ull;
+    while (vb_now_ns() < warm_end) {
+        memset(got, 0, sizeof got);
+        VB_DEV_PASS(fail_run);
+    }
+
+    /* Re-calibrate post warm-up, for the same reason as the CPU path. */
+    {
+        uint64_t t0 = vb_now_ns();
+        for (uint64_t r = 0; r < reps; r++) {
+            memset(got, 0, sizeof got);
+            VB_DEV_PASS(fail_run);
+        }
+        uint64_t ns = vb_now_ns() - t0;
+        if (ns > 0) {
+            double want = (double) reps * (target_ns / (double) ns);
+            reps = (uint64_t) (want < 1.0 ? 1.0 : want);
+        }
+    }
+
+    unsigned n_samples = cfg->n_samples;
+    if (n_samples > VB_MAX_SAMPLES)
+        n_samples = VB_MAX_SAMPLES;
+
+    /* Hashes per pass: every device sweeps its own slice repeats times. */
+    uint64_t per_pass = 0;
+    for (int i = 0; i < n_use; i++)
+        per_pass += ctx[i].n_messages * ctx[i].repeats;
+    out->hashes_per_iter = reps * per_pass;
+
+    out->device_global = ctx[0].global_size;
+    out->device_local = ctx[0].local_size;
+    out->device_repeats = ctx[0].repeats;
+    out->transfer = cfg->transfer;
+
+    /* Bytes crossing the link per pass: every device uploads its own slice. */
+    if (cfg->transfer == VB_TRANSFER_STREAM)
+        for (int i = 0; i < n_use; i++)
+            out->device_transfer_bytes += ctx[i].corpus_bytes;
+
+    uint64_t kernel_ns = 0, transfer_ns = 0;
+    vb_power_begin(&out->power);
+
+    for (unsigned si = 0; si < n_samples; si++) {
+        uint64_t t0 = vb_now_ns();
+        for (uint64_t r = 0; r < reps; r++) {
+            memset(got, 0, sizeof got);
+            VB_DEV_PASS(fail_run);
+            if (memcmp(got, expected_all, sizeof got) != 0) {
+                out->verified = 0;
+                out->n_samples = si;
+                goto fail_run;
+            }
+            /* Device time of the slowest device: they run concurrently, so the
+               pass is only as fast as its laggard. Transfer is accounted the
+               same way and separately, so the two can be compared. */
+            uint64_t slowest = 0, slowest_xfer = 0;
+            for (int i = 0; i < n_use; i++) {
+                if (ctx[i].last_kernel_ns > slowest)
+                    slowest = ctx[i].last_kernel_ns;
+                if (ctx[i].last_transfer_ns > slowest_xfer)
+                    slowest_xfer = ctx[i].last_transfer_ns;
+            }
+            kernel_ns += slowest;
+            transfer_ns += slowest_xfer;
+        }
+        double sec = (double) (vb_now_ns() - t0) / 1e9;
+        out->sample_hps[si] = (double) out->hashes_per_iter / sec;
+        out->total_seconds += sec;
+        out->total_hashes += out->hashes_per_iter;
+    }
+
+    vb_power_end(&out->power, out->total_seconds);
+
+    if (out->total_seconds > 0.0) {
+        out->device_busy = (double) kernel_ns / 1e9 / out->total_seconds;
+        out->device_transfer_busy =
+            (double) transfer_ns / 1e9 / out->total_seconds;
+    }
+
+    /*
+     * The goal 2 figure. Above 1.0 the kernel outlasts the upload, so the
+     * device is compute-limited and the accelerator is earning its place;
+     * below 1.0 the link binds and more device throughput buys nothing.
+     */
+    if (transfer_ns > 0) {
+        out->compute_transfer_ratio = (double) kernel_ns / (double) transfer_ns;
+
+        uint64_t passes = reps * n_samples;
+        double moved = (double) out->device_transfer_bytes * (double) passes;
+        out->device_transfer_gbps = moved / ((double) transfer_ns / 1e9) / 1e9;
+
+        /* Raw per-pass times, so a sweep can solve for the balance point
+           rather than bracket it. See the note in bench.h. */
+        if (passes > 0) {
+            out->device_kernel_ns_per_pass = kernel_ns / passes;
+            out->device_transfer_ns_per_pass = transfer_ns / passes;
+        }
+    }
+
+    for (int i = 0; i < n_init; i++)
+        vb_ocl_ctx_free(&ctx[i]);
+
+    out->n_samples = n_samples;
+    out->verified = 1;
+    compute_stats(out);
+    return 0;
+
+fail_run:
+    if (out->device_error[0] == 0 && n_init > 0)
+        snprintf(out->device_error, sizeof out->device_error, "%s",
+                 ctx[0].error);
+fail_init:
+    for (int i = 0; i < n_init; i++)
+        vb_ocl_ctx_free(&ctx[i]);
+    out->verified = 0;
+    return 1;
+    #undef VB_DEV_PASS
+}
+
+static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
+                               const vb_corpus *corpus, vb_result *out)
+{
+    uint64_t expected[VB_MAX_DIGEST_WORDS], got[VB_MAX_DIGEST_WORDS];
+    unsigned threads = cfg->threads ? cfg->threads : vb_online_cpus();
+
+    memset(out, 0, sizeof *out);
+    out->kernel = k;
+    out->iterations = cfg->iterations;
+    out->message_bytes = cfg->message_bytes;
+    out->alg = cfg->alg;
+    out->blocks = corpus->blocks;
+    out->batch_messages = corpus->n_messages;
+    out->working_set_bytes =
+        corpus->n_messages * (uint64_t) corpus->blocks * 64u;
+
+    vb_power_open(&out->power);
+
+    if (k->device) {
+        int rc = measure_device(k, cfg, corpus, out);
+        vb_power_close(&out->power);
+        return rc;
+    }
+
+    /* Single-threaded absolute gate first: cheapest way to reject a broken
+       kernel, and it establishes the canonical checksum. */
+    if (!vb_validate_kernel(k, cfg, corpus, got, expected)) {
+        out->verified = 0;
+        memcpy(out->checksum, got, sizeof got);
+        return 1;
+    }
+    memcpy(out->checksum, expected, sizeof expected);
+
+    vb_pool pool;
+    if (pool_create(&pool, k, cfg, corpus, threads) != 0) {
+        out->verified = 0;
+        return 1;
+    }
+    out->threads = pool.n;
+
+    uint64_t reps = calibrate_reps(&pool, cfg->target_ms);
+    if (reps == 0) {
+        pool_destroy(&pool);
+        out->verified = 0;
+        return 1;
+    }
+
+    /* Warm up: reach steady clocks and let caches and predictors settle.
+       Warm-up results are discarded, but still verified. */
+    uint64_t warm_end = vb_now_ns() + (uint64_t) cfg->warmup_ms * 1000000ull;
+    while (vb_now_ns() < warm_end) {
+        int ok;
+        pool_run(&pool, reps, &ok);
+        if (!ok) {
+            pool_destroy(&pool);
+            out->verified = 0;
+            return 1;
+        }
+    }
+
+    /*
+     * Re-calibrate now that warm-up has ramped clocks and filled caches. The
+     * first calibration necessarily runs on a cold machine, which on a
+     * frequency-scaling part under-counts what a rep will cost by enough to
+     * leave samples well short of --time-ms.
+     */
+    {
+        int ok;
+        uint64_t ns = pool_run(&pool, reps, &ok);
+        if (!ok) {
+            pool_destroy(&pool);
+            out->verified = 0;
+            return 1;
+        }
+        if (ns > 0) {
+            double want = (double) reps *
+                          ((double) cfg->target_ms * 1e6 / (double) ns);
+            reps = (uint64_t) (want < 1.0 ? 1.0 : want);
+        }
+    }
+
+    unsigned n = cfg->n_samples;
+    if (n > VB_MAX_SAMPLES)
+        n = VB_MAX_SAMPLES;
+
+    /* One rep is all threads together covering the batch exactly once. */
+    out->hashes_per_iter = reps * corpus->n_messages;
+
+    vb_power_begin(&out->power);
+
+    for (unsigned i = 0; i < n; i++) {
+        int ok;
+        uint64_t ns = pool_run(&pool, reps, &ok);
+        if (!ok) {
+            pool_destroy(&pool);
+            out->verified = 0;
+            out->n_samples = i;
+            return 1;
+        }
+        double sec = (double) ns / 1e9;
+        out->sample_hps[i] = (double) out->hashes_per_iter / sec;
+        out->total_seconds += sec;
+        out->total_hashes += out->hashes_per_iter;
+    }
+
+    vb_power_end(&out->power, out->total_seconds);
+    pool_destroy(&pool);
+    vb_power_close(&out->power);
+
+    out->n_samples = n;
+    out->verified = 1;
+    compute_stats(out);
+    return 0;
+}
+
+int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out)
+{
+    vb_corpus corpus;
+    int rc;
+
+    if (vb_corpus_build(&corpus, cfg->alg, k->lanes, 0,
+                        vb_batch_messages(cfg), cfg->message_bytes) != 0) {
+        memset(out, 0, sizeof *out);
+        out->kernel = k;
+        return 1;
+    }
+
+    rc = measure_with_corpus(k, cfg, &corpus, out);
+    vb_corpus_free(&corpus);
+    return rc;
+}
+
+const vb_kernel *vb_autotune(const vb_config *cfg, int verbose)
+{
+    size_t count;
+    const vb_kernel *ks = vb_kernels(&count);
+    const vb_kernel *best = NULL;
+    double best_hps = 0.0;
+
+    /* Short probes -- enough to rank, not to publish. */
+    vb_config probe = *cfg;
+    probe.target_ms = 20;
+    probe.n_samples = 3;
+    probe.warmup_ms = 20;
+
+    /*
+     * The corpus layout depends only on lane count, and the registry groups
+     * kernels by ISA, so a single-entry cache means one build per lane width
+     * rather than one per kernel. That matters at large message sizes, where
+     * the corpus can be hundreds of megabytes and rebuilding it sixteen times
+     * would dominate the run.
+     */
+    vb_corpus corpus;
+    unsigned corpus_lanes = 0;
+    memset(&corpus, 0, sizeof corpus);
+
+    if (verbose)
+        printf("Autotune (%u threads):\n",
+               cfg->threads ? cfg->threads : vb_online_cpus());
+
+    for (size_t i = 0; i < count; i++) {
+        const vb_kernel *k = &ks[i];
+        vb_result r;
+
+        if (k->alg != cfg->alg->id)
+            continue;                   /* different algorithm entirely */
+
+        /* Restricting where the winner may run is how a CPU baseline gets
+           measured on a machine whose device kernel would otherwise win every
+           probe. Silent here rather than verbose: an excluded half is a
+           deliberate request, not a fact about the machine. */
+        if ((cfg->where == VB_WHERE_CPU && k->device) ||
+            (cfg->where == VB_WHERE_DEVICE && !k->device))
+            continue;
+
+        if (!k->available()) {
+            if (verbose)
+                printf("  %-14s unavailable here\n", k->name);
+            continue;
+        }
+
+        if (k->lanes != corpus_lanes) {
+            vb_corpus_free(&corpus);
+            if (vb_corpus_build(&corpus, cfg->alg, k->lanes, 0,
+                                vb_batch_messages(cfg), cfg->message_bytes) != 0) {
+                if (verbose)
+                    printf("  %-14s corpus allocation failed -- skipped\n",
+                           k->name);
+                corpus_lanes = 0;
+                continue;
+            }
+            corpus_lanes = k->lanes;
+        }
+
+        if (measure_with_corpus(k, &probe, &corpus, &r) != 0) {
+            if (verbose)
+                printf("  %-14s FAILED VERIFICATION -- excluded\n", k->name);
+            continue;
+        }
+
+        if (verbose)
+            printf("  %-14s %10.2f MH/s\n", k->name, r.median / 1e6);
+
+        if (r.median > best_hps) {
+            best_hps = r.median;
+            best = k;
+        }
+    }
+
+    vb_corpus_free(&corpus);
+    return best;
+}

@@ -1,0 +1,184 @@
+/*
+ * bench.h -- measurement harness.
+ *
+ * This is free and unencumbered software released into the public domain.
+ * See LICENSE.
+ */
+
+#ifndef VALUBENCH_BENCH_H
+#define VALUBENCH_BENCH_H
+
+#include "valubench.h"
+#include "power.h"
+
+#include <stdint.h>
+
+#define VB_MAX_SAMPLES 256
+#define VB_MAX_THREADS 1024
+
+/*
+ * How the corpus reaches a device.
+ *
+ * RESIDENT uploads it once at setup and launches against it repeatedly. That is
+ * the right model for work that lives on the accelerator, and it is what every
+ * device figure in this benchmark meant before streaming existed.
+ *
+ * STREAM re-uploads it before every launch, putting the host-to-device link
+ * inside the timed region. This is the mode goal 2 needs: without it there is
+ * no PCIe traffic to be limited by, so "how many iterations keep the
+ * computation GPU-limited rather than PCIe-limited" has nothing to measure.
+ */
+typedef enum {
+    VB_TRANSFER_RESIDENT = 0,
+    VB_TRANSFER_STREAM
+} vb_transfer_mode;
+
+typedef struct {
+    const vb_kernel *kernel;
+    unsigned threads;
+    unsigned iterations;
+    unsigned message_bytes;
+    unsigned blocks;              /* 512-bit blocks per message */
+    uint64_t batch_messages;
+    uint64_t working_set_bytes;   /* size of the message corpus */
+
+    unsigned n_samples;
+    double   sample_hps[VB_MAX_SAMPLES];   /* hashes/sec per iteration */
+
+    double   min, max, median, mean, stddev, cov;
+
+    uint64_t hashes_per_iter;
+    uint64_t total_hashes;
+    double   total_seconds;
+
+    int      verified;          /* checksum matched on every timed iteration */
+    uint64_t checksum[VB_MAX_DIGEST_WORDS];
+    const vb_algorithm *alg;
+
+    /* Device kernels only; empty otherwise. */
+    char device_name[128];
+    char device_vendor[128];
+    char device_driver[64];
+    char device_error[512];
+    size_t   device_global;     /* work-items launched, first device */
+    size_t   device_local;      /* work-group size, first device */
+    uint32_t device_repeats;    /* corpus sweeps per launch, first device */
+    double   device_busy;       /* fraction of wall time spent in the kernel */
+    int      device_count;      /* devices used concurrently */
+
+    /*
+     * Transfer accounting. Meaningful only in streaming mode; zero otherwise.
+     *
+     * compute_transfer_ratio is the figure goal 2 asks for: kernel time over
+     * transfer time for the same work. Above 1 the device is compute-limited
+     * and the accelerator is earning its place; below 1 the link is the
+     * constraint and more device throughput buys nothing.
+     *
+     * Note the ratio answers the question for a *pipelined* implementation too,
+     * even though this one uploads and computes in sequence. Overlapping the
+     * two can hide the smaller of them but never the larger, so whichever side
+     * exceeds 1.0 is the binding constraint either way.
+     */
+    vb_transfer_mode transfer;
+    double   device_transfer_busy;   /* fraction of wall spent uploading */
+    double   device_transfer_gbps;   /* effective host-to-device rate */
+    uint64_t device_transfer_bytes;  /* uploaded per pass, all devices */
+    double   compute_transfer_ratio; /* kernel ns / transfer ns */
+
+    /*
+     * Per-pass device times, raw. These are what let a sweep *solve* for the
+     * balance point instead of bracketing it.
+     *
+     * Transfer is constant in the iteration count -- the same bytes cross the
+     * link at every point -- while kernel time is linear in it, because the
+     * workload is defined so that every iteration is identical work. So
+     *
+     *     kernel_ns(N) = a + b*N          transfer_ns = T
+     *
+     * and the balance point is N* = (T - a) / b, obtainable from two points and
+     * refined by a fit over more. `a` is the fixed per-launch cost; ignoring it
+     * is what makes the cruder estimate N/ratio drift.
+     */
+    uint64_t device_kernel_ns_per_pass;
+    uint64_t device_transfer_ns_per_pass;
+
+    vb_power power;             /* energy over the timed region */
+} vb_result;
+
+/*
+ * Which kernels autotune is allowed to consider.
+ *
+ * Device and CPU kernels compete in the same ranking by default, which is what
+ * "give me the fastest thing this machine has" means. But two questions need
+ * the losing side on purpose: "what is the whole CPU worth here", which is the
+ * baseline any accelerator is judged against, and "what does the device do",
+ * without a fast CPU hiding it. Without this, a GPU box cannot autotune a CPU
+ * number at all -- the device kernel wins every probe and the result is
+ * labelled a CPU baseline while being nothing of the sort.
+ */
+typedef enum {
+    VB_WHERE_ANY = 0,
+    VB_WHERE_CPU,
+    VB_WHERE_DEVICE
+} vb_where;
+
+typedef struct {
+    unsigned target_ms;         /* wall time per timed iteration */
+    unsigned n_samples;         /* timed iterations */
+    unsigned warmup_ms;
+    unsigned threads;           /* 0 = one per online CPU */
+    unsigned iterations;        /* chained MD5s per hash; >= 1 */
+    unsigned message_bytes;     /* message length */
+    const vb_algorithm *alg;    /* which hash to benchmark */
+    unsigned working_set_kb;    /* target corpus size; sets the batch count */
+    /* OpenCL devices to use. Empty means every device found. */
+    int      device_index[VB_MAX_THREADS];
+    int      device_count;
+    vb_transfer_mode transfer;  /* how the corpus reaches a device */
+    vb_where where;             /* which kernels autotune may pick from */
+    double   cov_threshold;     /* result flagged unstable above this */
+    int      pin_cpu;           /* pin worker threads to distinct cores */
+    const char *force_kernel;   /* NULL = autotune */
+} vb_config;
+
+void vb_config_defaults(vb_config *cfg);
+
+/* Monotonic nanoseconds, immune to NTP adjustment. */
+uint64_t vb_now_ns(void);
+
+/* Online CPUs, at least 1. */
+unsigned vb_online_cpus(void);
+
+/*
+ * Every kernel's group size must divide VB_BATCH_LCM, so the batch is always a
+ * whole number of groups and the checksum covers the same messages regardless
+ * of kernel, thread count or machine. Checked for every registered kernel by
+ * tests/test_kernels.c.
+ */
+int vb_batch_divides(const vb_kernel *k);
+
+/* Messages in the verified batch, and the corpus size that implies. */
+uint64_t vb_batch_messages(const vb_config *cfg);
+uint64_t vb_working_set_bytes(const vb_config *cfg);
+
+/*
+ * Validate a kernel against the scalar reference over the whole corpus.
+ * Returns 1 on match. This is the absolute correctness gate; it runs before
+ * anything is timed, so a broken build or a faulty machine fails loudly rather
+ * than reporting a fast wrong number.
+ */
+int vb_validate_kernel(const vb_kernel *k, const vb_config *cfg,
+                       const vb_corpus *corpus,
+                       uint64_t checksum_out[VB_MAX_DIGEST_WORDS],
+                       uint64_t expected[VB_MAX_DIGEST_WORDS]);
+
+/* Measure one kernel. Returns 0 on success, non-zero if verification failed. */
+int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out);
+
+/*
+ * Pick the fastest available kernel by short measurement. Every candidate is
+ * validated first; candidates that fail validation are excluded and reported.
+ */
+const vb_kernel *vb_autotune(const vb_config *cfg, int verbose);
+
+#endif /* VALUBENCH_BENCH_H */

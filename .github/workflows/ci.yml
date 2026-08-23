@@ -1,0 +1,83 @@
+name: build and check
+
+# The correctness gate is the point of this workflow. valubench refuses to
+# report a number it cannot verify, so a green run here means every registered
+# kernel reproduced the scalar reference across message sizes, block boundaries,
+# lane counts and iteration counts -- not merely that the code compiled.
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    name: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # No dependencies beyond a C compiler and make. OpenCL is dlopen'd at run
+      # time, so its absence on a runner is a normal no-device outcome rather
+      # than a build failure -- which this job also proves.
+      - name: show what this toolchain can build
+        run: make CC=${{ matrix.cc }} config
+
+      - name: build
+        run: make CC=${{ matrix.cc }} -j$(nproc)
+
+      - name: known-answer vectors and every kernel against its reference
+        run: make CC=${{ matrix.cc }} check
+
+      # A GitHub runner is a shared VM, so the throughput figure is worthless.
+      # This runs the shortest possible measurement purely to prove the binary
+      # executes end to end and verifies its own output.
+      - name: smoke run
+        run: |
+          ./build/valubench --samples 3 --time-ms 40 --warmup-ms 50 || \
+            test $? -eq 3   # exit 3 is "too noisy to trust", expected on a runner
+          ./build/valubench --list
+          ./build/valubench --list --json | python3 -m json.tool > /dev/null
+
+  # The ARM kernels are written and maintained on x86 machines, so without this
+  # job they would only be exercised when someone remembered to. Throughput
+  # under emulation is meaningless and nothing here records it -- but the
+  # verification checksum is invariant across architectures, so `make check`
+  # passing under qemu means NEON computes the same digests as x86.
+  cross-aarch64:
+    runs-on: ubuntu-latest
+    name: aarch64 (cross, emulated)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install the cross toolchain and emulator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu qemu-user-static
+
+      # HOSTCC stays native because embed_cl runs on the builder. BUILD keeps
+      # the cross objects separate. The architecture comes from the compiler,
+      # not from uname, so the build configures for aarch64.
+      - name: configure for aarch64
+        run: make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 config
+
+      - name: build
+        run: make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 -j$(nproc)
+
+      - name: known-answer vectors and every kernel, under emulation
+        env:
+          QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+        run: make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 check
+
+      - name: the checksum must match the x86 value
+        env:
+          QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+        run: |
+          got=$(./build-arm64/valubench --kernel md5/neon-s4 --threads 1 \
+                  --samples 2 --time-ms 20 --warmup-ms 20 \
+                | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+          echo "neon: $got"
+          test "$got" = "955e84cbbc05470019604a2bd9ff2821"

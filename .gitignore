@@ -1,0 +1,28 @@
+# Build output
+build/
+*.o
+*.d
+*.so
+*.a
+valubench
+
+# Benchmark results
+results/
+results-*/
+results-*.tar.gz
+*.json.out
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editor / OS
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Planning notes, deliberately not published
+docs/roadmap.md
+build-*/

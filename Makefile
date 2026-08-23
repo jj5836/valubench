@@ -1,0 +1,317 @@
+# valubench -- integer SIMD microbenchmark
+#
+# This is free and unencumbered software released into the public domain.
+# See LICENSE.
+#
+# Deliberately plain. No configure step, no generated build files, no network.
+# Building needs only a C11 compiler, POSIX threads, and make.
+#
+#   make                     build with the default compiler
+#   make CC=gcc              build with GCC
+#   make CC=clang            build with Clang/LLVM
+#   make config              show what this toolchain can build
+#   make check               run every correctness test
+#
+# Two deliberate absences:
+#
+#   -march=native  would make the binary's behaviour depend on the machine that
+#                  compiled it, which is exactly the hidden variable that makes
+#                  benchmark results incomparable. Each SIMD path is compiled
+#                  into its own object with its own -m flags and selected at
+#                  runtime by CPUID instead. See docs/research.md 4.3.
+#
+#   -flto          link-time optimization could let the compiler prove that
+#                  the message corpus is effectively constant and fold message
+#                  words into the round constants. That shortcut is exactly what
+#                  this workload excludes, because it does less work per hash.
+#                  Do not enable it.
+
+CC      ?= cc
+# embed_cl runs on the machine doing the building, not on the target, so it gets
+# its own compiler. It defaults to $(CC), which is right for a normal build and
+# wrong for a cross build -- pass HOSTCC there.
+HOSTCC  ?= $(CC)
+CFLAGS  ?= -O2
+CFLAGS  += -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Iinclude -Isrc
+# The embedded OpenCL kernels are generated into $(BUILD) on every build.
+CFLAGS  += -I$(BUILD)
+LDFLAGS ?=
+LDLIBS  ?=
+
+# pthreads. -pthread is understood by both GCC and Clang and sets both the
+# compile-time and link-time requirements.
+CFLAGS  += -pthread
+LDLIBS  += -pthread
+
+BUILD := build
+$(shell mkdir -p $(BUILD))
+
+# ---- toolchain probing --------------------------------------------------
+#
+# Ask the compiler what it can actually generate rather than assuming, so the
+# same Makefile works for GCC, Clang, and cross-compilers with differing ISA
+# support. A path is compiled in only if it builds; the runtime CPUID check is
+# separate and always applies, because "compiled in" never implies "safe to
+# run here".
+
+probe = $(shell printf 'int main(void){return 0;}' > $(BUILD)/.probe.c 2>/dev/null && \
+          $(CC) $(1) -c -o $(BUILD)/.probe.o $(BUILD)/.probe.c >/dev/null 2>&1 && \
+          echo yes || echo no)
+
+# The target architecture, not the host's. `uname -m` answers the wrong question
+# under cross-compilation -- it would report x86_64 while building for aarch64,
+# and the build would try to hand SSE2 sources to an ARM compiler. Ask the
+# compiler what it targets, and fall back to uname only if it cannot say.
+ARCH := $(shell $(CC) -dumpmachine 2>/dev/null | cut -d- -f1)
+ifeq ($(ARCH),)
+  ARCH := $(shell uname -m 2>/dev/null)
+endif
+
+# Use the real Khronos headers when the system has them, our own declarations
+# when it does not. Runtime behaviour is identical either way -- libOpenCL is
+# always dlopen'd, never linked -- so this only decides where the types come
+# from at compile time. Install `opencl-headers` to switch it on.
+HAVE_CL_HEADERS := $(shell printf '#include <CL/cl.h>\nint main(void){return 0;}' \
+  > $(BUILD)/.clprobe.c 2>/dev/null && \
+  $(CC) -DCL_TARGET_OPENCL_VERSION=120 -c -o $(BUILD)/.clprobe.o \
+    $(BUILD)/.clprobe.c >/dev/null 2>&1 && echo yes || echo no)
+
+ifeq ($(HAVE_CL_HEADERS),yes)
+  CFLAGS += -DVB_HAVE_CL_HEADERS=1
+endif
+
+# Does CC exist at all? Without this check a missing compiler makes every ISA
+# probe answer "no", and the build quietly succeeds as a scalar-only binary that
+# under-reports the machine several-fold with no indication anything is wrong.
+CC_OK := $(shell $(CC) --version >/dev/null 2>&1 && echo yes || echo no)
+
+ifeq ($(CC_OK),no)
+  ifeq ($(filter clean config,$(MAKECMDGOALS)),)
+    $(error C compiler '$(CC)' not found or not runnable.       Install it, or pass one: make CC=gcc / make CC=clang.       Note that the 'llvm' package does not provide the clang driver --       that is the 'clang' package.)
+  endif
+endif
+
+# AArch64: Advanced SIMD is architecturally mandatory, so the probe is really
+# asking whether this toolchain has the intrinsics header rather than whether
+# the target supports the instructions. No -m flag is needed or wanted.
+HAVE_NEON := no
+ifneq ($(filter aarch64 arm64,$(ARCH)),)
+  HAVE_NEON := $(shell printf '#include <arm_neon.h>\nint main(void){uint32x4_t v=vdupq_n_u32(1);return (int)vgetq_lane_u32(v,0)-1;}' \
+    > $(BUILD)/.neonprobe.c 2>/dev/null && \
+    $(CC) -c -o $(BUILD)/.neonprobe.o $(BUILD)/.neonprobe.c >/dev/null 2>&1 && echo yes || echo no)
+endif
+
+ifeq ($(filter x86_64 i686 i386,$(ARCH)),)
+  HAVE_SSE2   := no
+  HAVE_AVX2   := no
+  HAVE_AVX512 := no
+  HAVE_SHANI  := no
+else
+  HAVE_SSE2   := $(call probe,-msse2)
+  HAVE_AVX2   := $(call probe,-mavx2)
+  HAVE_AVX512 := $(call probe,-mavx512f)
+  HAVE_SHANI  := $(call probe,-msha)
+
+  # SSE2 is part of the x86-64 baseline; any working compiler targeting it can
+  # emit SSE2. If the probe says otherwise the toolchain is broken, and a build
+  # that continues would silently produce scalar-only results.
+  ifeq ($(HAVE_SSE2),no)
+    ifeq ($(filter clean config,$(MAKECMDGOALS)),)
+      $(error compiler '$(CC)' cannot build SSE2 on $(ARCH), which is part of         the x86-64 baseline. The toolchain looks broken; run 'make config'.)
+    endif
+  endif
+endif
+
+# ---- kernels ------------------------------------------------------------
+#
+# Every CPU kernel lives in src/kernels/cpu/ and is one translation unit
+# compiled with its own ISA flags. To add one:
+#
+#   1. write src/kernels/cpu/<name>.c defining the OPS_* macros and
+#      instantiating the template (see src/kernels/cpu/README.md)
+#   2. add a KFLAGS_<name> line below, and a HAVE_ guard if it needs one
+#   3. add it to KERNELS
+#   4. add a block to src/kernels/cpu/matrix.h and a token to
+#      VB_FOR_EACH_KERNEL
+#
+# src/registry.c is *not* touched: its declarations and rows are expanded from
+# the matrix. (This comment used to say otherwise, which was true only before
+# the matrix existed.)
+#
+# Nothing else in the build sees those flags, so no ISA can leak into the
+# dispatcher or the harness.
+
+KFLAGS_scalar :=
+KFLAGS_sse2   := -msse2
+KFLAGS_avx2   := -mavx2
+KFLAGS_avx512 := -mavx512f
+KFLAGS_shani  := -msha
+KFLAGS_neon   :=            # Advanced SIMD is the AArch64 baseline
+
+KERNELS := scalar
+KERNEL_DEFS :=
+
+ifeq ($(HAVE_SSE2),yes)
+  KERNELS     += sse2
+  KERNEL_DEFS += -DVB_HAVE_SSE2=1
+else
+  KERNEL_DEFS += -DVB_HAVE_SSE2=0
+endif
+
+ifeq ($(HAVE_AVX2),yes)
+  KERNELS     += avx2
+  KERNEL_DEFS += -DVB_HAVE_AVX2=1
+else
+  KERNEL_DEFS += -DVB_HAVE_AVX2=0
+endif
+
+ifeq ($(HAVE_AVX512),yes)
+  KERNELS     += avx512
+  KERNEL_DEFS += -DVB_HAVE_AVX512=1
+else
+  KERNEL_DEFS += -DVB_HAVE_AVX512=0
+endif
+
+ifeq ($(HAVE_SHANI),yes)
+  KERNELS     += shani
+  KERNEL_DEFS += -DVB_HAVE_SHANI=1
+else
+  KERNEL_DEFS += -DVB_HAVE_SHANI=0
+endif
+
+ifeq ($(HAVE_NEON),yes)
+  KERNELS     += neon
+  KERNEL_DEFS += -DVB_HAVE_NEON=1
+else
+  KERNEL_DEFS += -DVB_HAVE_NEON=0
+endif
+
+KERNEL_OBJS := $(addprefix $(BUILD)/kernel_,$(addsuffix .o,$(KERNELS)))
+
+# OpenCL is dlopen'd, never linked: -ldl is the only addition, and the binary
+# runs unchanged on a machine with no GPU or no OpenCL at all.
+OCL_OBJS := $(BUILD)/ocl_loader.o $(BUILD)/ocl_backend.o
+LDLIBS   += -ldl
+
+# The scalar reference implementations -- the correctness oracles every kernel
+# is validated against. Discovered rather than listed: one per algorithm in
+# src/reference/, so adding an algorithm does not also mean remembering to edit
+# two lists down here. A reference that is not linked is a kernel with nothing
+# to validate against.
+REF_OBJS := $(patsubst src/reference/%.c,$(BUILD)/ref_%.o,\
+                       $(wildcard src/reference/*.c))
+
+CORE_OBJS := $(REF_OBJS) \
+             $(BUILD)/algorithm.o $(BUILD)/workload.o $(BUILD)/cpu_features.o \
+             $(BUILD)/bench.o $(BUILD)/sysinfo.o $(BUILD)/report.o \
+             $(BUILD)/registry.o $(BUILD)/power.o $(KERNEL_OBJS) $(OCL_OBJS)
+
+HDRS := include/hashes.h include/sha512_const.h \
+        include/algorithm.h include/valubench.h \
+        include/bench.h include/sysinfo.h include/report.h \
+        include/cpu_features.h include/vb_cl.h include/opencl.h \
+        include/opencl_backend.h include/power.h
+# Every kernel translation unit depends on the whole template set and on the
+# matrix, so any of them changing rebuilds all of them.
+KHDRS := $(wildcard src/kernels/cpu/*.h)
+
+.PHONY: all test check check-kernels clean config
+
+all: $(BUILD)/valubench $(BUILD)/test_hashes $(BUILD)/test_kernels
+
+config:
+	@echo "arch        $(ARCH)"
+	@echo "CC          $(CC)"
+	@echo "found       $(CC_OK)"
+	@echo "version     $$($(CC) --version 2>/dev/null | head -1)"
+	@echo "sse2        $(HAVE_SSE2)"
+	@echo "avx2        $(HAVE_AVX2)"
+	@echo "avx512f     $(HAVE_AVX512)"
+	@echo "sha-ni      $(HAVE_SHANI)"
+	@echo "neon        $(HAVE_NEON)"
+	@echo "kernels     $(KERNELS)"
+	@echo "CL headers  $(HAVE_CL_HEADERS) $(if $(filter no,$(HAVE_CL_HEADERS)),(using built-in declarations; install opencl-headers to use the real ones),)"
+
+# ---- generated sources --------------------------------------------------
+#
+# Constant tables are transcribed from their specifications and checked by the
+# known-answer vectors, so there is nothing to generate for them. The only
+# generated artifact is the embedded OpenCL kernel below.
+
+# The OpenCL kernels are real .cl files carrying their own constants and round
+# schedules, so embedding one is a single step: embed_cl turns the file into a
+# byte array the binary compiles in, and nothing has to be installed or located
+# at run time.
+#
+# Generated into $(BUILD), not committed. The output is a pure function of the
+# .cl file and embed_cl needs nothing but the C compiler the build already
+# requires, so a checked-in copy could only be a second source of truth to keep
+# in sync -- which it did not: a `check-embed` target existed solely to catch
+# drift, and the headers were once found truncated in a working tree with a
+# green build behind them.
+#
+# Adding a device kernel is adding a .cl file. The symbol and include guard are
+# derived from its name.
+CL_SOURCES := $(wildcard src/kernels/gpu/*.cl)
+CL_HEADERS := $(patsubst src/kernels/gpu/%.cl,$(BUILD)/%_kernel.h,$(CL_SOURCES))
+
+$(BUILD)/embed_cl: tools/embed_cl.c
+	$(HOSTCC) -O2 -std=c11 -Iinclude -o $@ $<
+
+CL_UC = $(shell echo $(1) | tr a-z A-Z)
+
+# Without this make treats the headers as intermediates of a pattern rule and
+# deletes them once the objects are built, leaving nothing to read when a device
+# kernel misbehaves.
+.SECONDARY: $(CL_HEADERS)
+
+$(BUILD)/%_kernel.h: src/kernels/gpu/%.cl $(BUILD)/embed_cl
+	$(BUILD)/embed_cl VB_OCL_$(call CL_UC,$*)_SOURCE \
+	    VALUBENCH_OPENCL_$(call CL_UC,$*)_KERNEL_H < $< > $@
+
+# ---- objects ------------------------------------------------------------
+
+$(BUILD)/%.o: src/%.c $(HDRS)
+	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
+
+$(BUILD)/ref_%.o: src/reference/%.c $(HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/kernel_%.o: src/kernels/cpu/%.c $(KHDRS) $(HDRS)
+	$(CC) $(CFLAGS) $(KFLAGS_$*) -c -o $@ $<
+
+# KERNEL_DEFS here too: backend.c includes the kernel matrix for the device
+# list, and without the ISA defines the matrix would mean something different in
+# this translation unit than in every other one.
+$(BUILD)/ocl_%.o: src/opencl/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
+	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
+
+$(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/test_kernels.o: tests/test_kernels.c $(HDRS)
+	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
+
+# ---- binaries -----------------------------------------------------------
+
+$(BUILD)/valubench: $(BUILD)/main.o $(CORE_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_hashes: $(BUILD)/test_hashes.o $(REF_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_kernels: $(BUILD)/test_kernels.o $(CORE_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# ---- checks -------------------------------------------------------------
+
+test: $(BUILD)/test_hashes
+	$(BUILD)/test_hashes
+
+check-kernels: $(BUILD)/test_kernels
+	$(BUILD)/test_kernels
+
+check: test check-kernels
+
+clean:
+	rm -rf $(BUILD)
