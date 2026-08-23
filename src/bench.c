@@ -147,6 +147,17 @@ typedef struct {
     uint64_t   groups;          /* groups in this slice */
     uint64_t   expected[VB_MAX_DIGEST_WORDS];  /* reference for this slice */
 
+    /* What this worker needs to compute `expected` itself. The reference pass
+       costs iterations x messages of scalar hashing and used to run serially on
+       the calling thread, which put a 30-core machine at load 1.00 for minutes
+       before it measured anything. Each slice is independent, so each worker
+       does its own. */
+    const vb_algorithm *ref_alg;
+    uint32_t   ref_start;
+    uint64_t   ref_count;
+    uint32_t   ref_message_bytes;
+    uint32_t   ref_iterations;
+
     int        ok;              /* 0 if verification failed */
 } vb_worker;
 
@@ -190,12 +201,21 @@ static void run_slice(vb_pool *p, vb_worker *w)
     w->ok = ok;
 }
 
+/* The reference pass for one slice. Pure per message, so slices share nothing
+   and the result is identical to computing the whole range serially. */
+static void worker_reference(vb_worker *w)
+{
+    vb_reference_checksum(w->ref_alg, w->ref_start, w->ref_count,
+                          w->ref_message_bytes, w->ref_iterations, w->expected);
+}
+
 static void *worker_main(void *arg)
 {
     vb_worker *w = (vb_worker *) arg;
     vb_pool *p = w->pool;
 
     pin_self(w->cpu);
+    worker_reference(w);
 
     for (;;) {
         pthread_barrier_wait(&p->start_bar);
@@ -270,10 +290,11 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
                   + (first_msg / corpus->lanes) * slot_words
                     * corpus->alg->word_bytes;
 
-        vb_reference_checksum(cfg->alg,
-                              corpus->start_index + (uint32_t) first_msg,
-                              w->groups * group, cfg->message_bytes,
-                              cfg->iterations, w->expected);
+        w->ref_alg           = cfg->alg;
+        w->ref_start         = corpus->start_index + (uint32_t) first_msg;
+        w->ref_count         = w->groups * group;
+        w->ref_message_bytes = cfg->message_bytes;
+        w->ref_iterations    = cfg->iterations;
         off += w->groups;
     }
 
@@ -295,6 +316,10 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
             break;
         }
     }
+
+    /* Worker 0 runs on the calling thread. Doing its slice here, after the
+       others are spawned, means every slice is computed concurrently. */
+    worker_reference(&p->w[0]);
 
     return 0;
 }
@@ -330,8 +355,12 @@ int vb_validate_kernel(const vb_kernel *k, const vb_config *cfg,
     if (!vb_batch_divides(k) || (corpus->n_messages % group) != 0)
         return 0;
 
-    vb_reference_checksum(cfg->alg, corpus->start_index, corpus->n_messages,
-                          cfg->message_bytes, cfg->iterations, expected);
+    /* No worker pool on this path -- it is what a device kernel and `make check`
+       use -- so parallelise the reference itself. This was the single largest
+       cost of a GPU crossover sweep: one core, minutes per point. */
+    vb_reference_checksum_mt(cfg->alg, corpus->start_index, corpus->n_messages,
+                             cfg->message_bytes, cfg->iterations,
+                             vb_online_cpus(), expected);
     k->fn(corpus->words, corpus->n_messages / group, corpus->blocks,
           cfg->iterations, checksum_out);
 

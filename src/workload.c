@@ -14,6 +14,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <string.h>
 
 /*
@@ -164,6 +165,74 @@ void vb_corpus_free(vb_corpus *c)
     free(c->words);
     c->words = NULL;
     c->n_words = 0;
+}
+
+/* XOR is associative and commutative, so a range splits cleanly: the checksum
+   of the whole equals the XOR of the checksums of its parts. That is what lets
+   the reference pass -- iterations x messages of scalar hashing, and the
+   dominant cost of a crossover sweep -- run on more than one core. */
+struct ref_slice {
+    const vb_algorithm *alg;
+    uint32_t start;
+    uint64_t count;
+    uint32_t message_bytes;
+    uint32_t iterations;
+    uint64_t out[VB_MAX_DIGEST_WORDS];
+};
+
+static void *ref_slice_main(void *arg)
+{
+    struct ref_slice *sl = (struct ref_slice *) arg;
+    vb_reference_checksum(sl->alg, sl->start, sl->count, sl->message_bytes,
+                          sl->iterations, sl->out);
+    return NULL;
+}
+
+void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
+                              uint64_t count, uint32_t message_bytes,
+                              uint32_t iterations, unsigned threads,
+                              uint64_t checksum[VB_MAX_DIGEST_WORDS])
+{
+    if (threads < 2 || count < threads) {
+        vb_reference_checksum(alg, start, count, message_bytes, iterations,
+                              checksum);
+        return;
+    }
+
+    struct ref_slice *sl = calloc(threads, sizeof *sl);
+    pthread_t *tid = calloc(threads, sizeof *tid);
+    if (!sl || !tid) {                    /* fall back rather than fail */
+        free(sl); free(tid);
+        vb_reference_checksum(alg, start, count, message_bytes, iterations,
+                              checksum);
+        return;
+    }
+
+    uint64_t base = count / threads, extra = count % threads, off = 0;
+    unsigned spawned = 0;
+    for (unsigned i = 0; i < threads; i++) {
+        sl[i].alg = alg;
+        sl[i].start = start + (uint32_t) off;
+        sl[i].count = base + (i < extra ? 1 : 0);
+        sl[i].message_bytes = message_bytes;
+        sl[i].iterations = iterations;
+        off += sl[i].count;
+        if (i > 0 && pthread_create(&tid[i], NULL, ref_slice_main, &sl[i]) == 0)
+            spawned = i;
+    }
+    ref_slice_main(&sl[0]);               /* this thread takes slice 0 */
+
+    uint64_t acc[VB_MAX_DIGEST_WORDS] = { 0 };
+    for (unsigned i = 0; i < threads; i++) {
+        if (i > 0 && i <= spawned)
+            pthread_join(tid[i], NULL);
+        else if (i > 0)
+            ref_slice_main(&sl[i]);       /* a create failed; do it here */
+        for (unsigned j = 0; j < VB_MAX_DIGEST_WORDS; j++)
+            acc[j] ^= sl[i].out[j];
+    }
+    memcpy(checksum, acc, sizeof acc);
+    free(sl); free(tid);
 }
 
 void vb_reference_checksum(const vb_algorithm *alg, uint32_t start,

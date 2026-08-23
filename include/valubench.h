@@ -194,10 +194,19 @@ typedef struct {
 /* Registry. Kernels whose available() returns 0 are never selected. */
 const vb_kernel *vb_kernels(size_t *count);
 
-/* Reference checksum over [start, start+count), via the scalar reference MD5. */
+/* Reference checksum over [start, start+count), via the algorithm's scalar
+   reference implementation. The _mt form splits the range across `threads` and
+   XORs the parts, which is exact -- XOR is associative and commutative -- and
+   is what keeps a crossover sweep from spending minutes of one core proving an
+   answer before it measures anything. */
 void vb_reference_checksum(const vb_algorithm *alg, uint32_t start,
                            uint64_t count, uint32_t message_bytes,
                            uint32_t iterations,
                            uint64_t checksum[VB_MAX_DIGEST_WORDS]);
+
+void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
+                              uint64_t count, uint32_t message_bytes,
+                              uint32_t iterations, unsigned threads,
+                              uint64_t checksum[VB_MAX_DIGEST_WORDS]);
 
 #endif /* VALUBENCH_H */
