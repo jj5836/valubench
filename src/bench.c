@@ -543,10 +543,15 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
         n_init++;
         vb_ocl_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM);
 
-        vb_reference_checksum(cfg->alg,
-                              corpus->start_index + (uint32_t) (off * group),
-                              mine * group, cfg->message_bytes,
-                              cfg->iterations, expect[i]);
+        /* Parallel, like the other two paths. This is the one that hurt: a
+           device crossover sweep verifies iterations x messages of scalar
+           hashing per point, and on an A10 that was 733 seconds of a single
+           core for one point, with nothing else running. Each device's slice
+           is independent, so the split within a slice is free. */
+        vb_reference_checksum_mt(cfg->alg,
+                                 corpus->start_index + (uint32_t) (off * group),
+                                 mine * group, cfg->message_bytes,
+                                 cfg->iterations, vb_online_cpus(), expect[i]);
         off += mine;
     }
 
