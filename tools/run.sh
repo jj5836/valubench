@@ -262,10 +262,19 @@ if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
     note "  sudo systemctl disable --now unattended-upgrades"
 fi
 
-# Energy needs the counters readable. -n is not optional: plain sudo prompts for
-# a password where one is required, and with stderr discarded that is a silent
-# hang before the capture has measured anything. Passwordless sudo is the norm on
-# a rented instance and not the norm anywhere else.
+# Energy needs the driver loaded and the counters readable. -n is not optional:
+# plain sudo prompts for a password where one is required, and with stderr
+# discarded that is a silent hang before the capture has measured anything.
+# Passwordless sudo is the norm on a rented instance and not the norm anywhere
+# else.
+#
+# The modprobe is for AWS bare metal, whose kernels ship without intel_rapl_msr
+# so that /sys/class/powercap does not exist at all -- C3 then skips reporting
+# "no readable counter", which is true and unhelpful, since a package supplies
+# the driver. Loading it here is too late if the module is absent (that needs
+# linux-modules-extra, which the session setup script installs), but it costs
+# nothing and covers the case where it is merely unloaded.
+[ -d /sys/class/powercap ] || sudo -n modprobe intel_rapl_msr 2>/dev/null || true
 sudo -n chmod a+r /sys/class/powercap/*/energy_uj 2>/dev/null || true
 HAVE_RAPL=0
 for e in /sys/class/powercap/intel-rapl:*/energy_uj \
@@ -438,9 +447,23 @@ else
                --time-ms $(( FREQ_SECS * 1000 / SAMPLES )) --warmup-ms 200 \
                > "$OUT/p2-run-$1.txt" 2>&1
         kill $sampler 2>/dev/null; wait $sampler 2>/dev/null
-        awk '{ s+=$1; n++; if (min==""||$1<min) min=$1; if ($1>max) max=$1 }
-             END { if (n) printf "      %-10s mean %.0f MHz   min %.0f   max %.0f   (%d samples)\n",
-                          "'"$1"'", s/n/1000, min/1000, max/1000, n }' "$out" | show
+        # Median and a low percentile, not the mean. A licence downclock shows up
+        # as a *tail* -- most samples at full clock, some below -- and the mean
+        # is exactly the statistic a tail corrupts. On Sapphire Rapids the mean
+        # read 3719 MHz against AVX2's 3800 and looked like a 2% downclock; the
+        # median was 3800, identical, with 9% of samples in a tail. The count
+        # below a threshold is what actually distinguishes the two.
+        sort -n "$out" | awk -v label="$1" '
+             { v[n++] = $1 }
+             END {
+                 if (!n) exit
+                 med = v[int(n/2)]; p5 = v[int(n/20)]
+                 lo = 0
+                 for (i = 0; i < n; i++) if (v[i] < med * 0.97) lo++
+                 printf "      %-10s median %.0f MHz   p5 %.0f   min %.0f   " \
+                        "%d of %d below 97%% of median\n",
+                        label, med/1000, p5/1000, v[0]/1000, lo, n
+             }' | show
     }
     note "one core loaded, sampling cpu0 every 250 ms for ~${FREQ_SECS}s per kernel."
     note "scalar is the non-vector baseline; the question is whether the"
@@ -465,7 +488,8 @@ PY
         *" $SCALARK "*) ;;
         *) [ -n "$SCALARK" ] && sample_freq scalar "$SCALARK" ;;
     esac
-    note "a lower mean under the wider kernel is the downclock; equal means none"
+    note "equal medians mean no steady-state licence penalty. A tail -- samples"
+    note "below the median where the narrower kernel has none -- is a transient one."
 fi
 
 # ------------------------------------------------------------- C3: energy

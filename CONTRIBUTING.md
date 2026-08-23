@@ -121,6 +121,20 @@ recovering on its own. The `ControlPath` limit is not advisory either: a Unix
 socket path of 108 bytes or more fails at connection time, and temp directories
 routinely exceed it.
 
+**Energy needs the RAPL driver, and AWS kernels ship without it.** On bare
+metal, `/sys/class/powercap` may not exist at all — the failure is silent, and
+the energy phase simply reports no counter:
+
+```bash
+[ -d /sys/class/powercap ] || sudo apt install -y "linux-modules-extra-$(uname -r)"
+sudo modprobe intel_rapl_msr
+sudo chmod a+r /sys/class/powercap/*/energy_uj
+```
+
+Do it **before** starting a capture: the run decides once, during its
+environment phase, whether energy is available, so loading the driver mid-run
+does not help.
+
 **Run detached, and copy results off as they land** rather than in one transfer
 at the end. The script writes its log to disk before the terminal and tars the
 output directory on exit, including on failure, so a session survives losing the
