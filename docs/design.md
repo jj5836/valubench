@@ -20,8 +20,8 @@ REQUIREMENTS
 Everything above is the original brief and stands unchanged. This section records
 what turned out to be true once the work started — the things that would have
 changed the plan had we known them on day one. Full reasoning lives in
-research.md and every measured number lives in [../RESULTS.md](../RESULTS.md); this is
-the executive version.
+research.md; this is the executive version. Figures quoted here name the
+machine they came from.
 
 ## 1. MD5 is the right vehicle, for a reason that is not obvious
 
@@ -56,12 +56,12 @@ algorithm that satisfies this finding when it is added can stop satisfying it
 later, without anything in the project changing. TODO item 7 carries the work.
 
 Measured on the N100, the fixed-function path runs at **more than twice the best
-integer-SIMD path** ([../RESULTS.md](../RESULTS.md#shani)) — and the SIMD path there is
+integer-SIMD path** — and the SIMD path there is
 using eight lanes and three interleaved streams to get its number, against one
 message at a time on the SHA unit.
 
 **On Zen 5 the same comparison inverts: the SHA unit is worth less than half the
-integer-SIMD path** ([../RESULTS.md](../RESULTS.md#shani-zen5)). Nothing about SHA-NI
+integer-SIMD path**. Nothing about SHA-NI
 changed between the two machines; the vector path beside it did. So the question
 this finding exists to answer — what is a fixed-function unit worth — turns out
 to have no answer that survives a change of core, and the honest form of it is a
@@ -79,7 +79,7 @@ Two caveats that matter more than the ratio itself:
   Every other kernel in this benchmark needs 3-4 interleaved streams to fill the
   pipeline, and interleaving is the single largest win in the benchmark. On
   SHA-NI more streams are monotonically *worse*
-  ([the ladder](../RESULTS.md#shani)). A single dependency chain already saturates
+  (the ladder). A single dependency chain already saturates
   the unit, so `SHA1RNDS4`'s reciprocal throughput must be close to its latency.
   Extra streams buy nothing and cost registers.
 
@@ -140,7 +140,7 @@ That operational intensity puts the workload far to the right of the roofline
 ridge point on any machine we are likely to meet. Measured on the development
 box, moving the working set from L2-resident to 128 MiB costs about a tenth of
 throughput, and DRAM is no worse than L3
-([the sweep](../RESULTS.md#axis-working-set)). There is no knee to find.
+(the sweep). There is no knee to find.
 
 What this means for planning:
 
@@ -173,7 +173,7 @@ question from the outset rather than a general compute-vs-memory one.
 All three algorithms now have OpenCL kernels, which makes a comparison possible
 that MD5 alone would have hidden: the same iGPU against one N100 core, each side
 at its own best kernel, gives a **different accelerator advantage for every
-algorithm** ([the table](../RESULTS.md#gpu-advantage)).
+algorithm** (the table).
 
 Both sides get slower on SHA-512 — the CPU's AVX2 lanes halve at 64 bits too —
 but the GPU loses about half again as much of its relative footing. The cause is
@@ -189,7 +189,7 @@ would have given a number that quietly does not transfer to the next workload.
 A second, narrower result worth carrying into any future device kernel:
 **stream interleaving is a CPU technique that does not port.** On the CPU it is
 the single biggest win. On the GPU it is at best neutral and often catastrophic
-([the numbers](../RESULTS.md#gpu-streams)). The device already has thousands of
+(the numbers). The device already has thousands of
 work-items in flight, so a second stream hides no latency that was not already
 hidden; it only consumes registers. The right device answer for a
 register-hungry algorithm is one stream.
@@ -209,7 +209,7 @@ Sweeping `--iterations` walks that ratio through 1.0, and the crossing is N\* �
 the answer to "how many iterations of the kernel do I need to keep the overall
 computation GPU-limited rather than PCIe-limited". On the development iGPU, MD5
 crosses within the first few iterations while the measured link rate stays flat
-throughout ([the sweep](../RESULTS.md#crossover)), which is the check that the link
+throughout (the sweep), which is the check that the link
 is being measured consistently rather than varying with the workload.
 
 **N\* is solved, not searched for.** Transfer time is constant in the iteration
@@ -226,12 +226,12 @@ run so far. A geometric sweep alone would only bracket N\* to within its own
 step, which is a factor-of-two answer rather than a balance point. Separating
 the fixed launch cost `a` is what makes it exact: the cruder `N / ratio`
 estimate charges that cost to compute and drifts where the fit does not
-([both](../RESULTS.md#nstar)).
+(both).
 
 **N\* is a property of the (kernel, working set) pair, not of the kernel.**
 Doubling the corpus moved it by a third, because compute scaled linearly while
 transfer scaled faster -- the achieved link rate itself fell
-([measured](../RESULTS.md#nstar-ws)). Quote the working set alongside the number or
+(measured). Quote the working set alongside the number or
 the claim does not travel.
 
 Three further things about this measurement are worth stating, because they are
@@ -309,7 +309,7 @@ as intended, but it means "wider is faster" cannot be assumed anywhere.
 **Both halves of that are now measured on one page.** On Zen 5 the same width
 doubling is worth nearly the full 2x, and AVX-512 clears the instruction-count
 prediction rather than falling short of it as Cascade Lake did
-([../RESULTS.md](../RESULTS.md#avx512)). Width is worth what the datapath behind it is
+. Width is worth what the datapath behind it is
 worth, and generation is worth what the issue ports allow — two independent
 variables that a single machine cannot separate, and three machines do.
 
@@ -319,7 +319,7 @@ The 10%-significance bar is easily swamped by things the benchmark cannot change
 CPU governor, competing system load, SMT, thermal and power state. On the
 development machine, background load alone pushes multi-threaded run-to-run
 variation well past the 10% bar
-([the figures](../RESULTS.md#environment-and-noise)).
+(the figures).
 
 The only honest response is to **measure the environment, report it with the
 result, and flag when conditions make a number untrustworthy** — which is what

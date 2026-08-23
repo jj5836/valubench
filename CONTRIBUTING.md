@@ -34,10 +34,11 @@ an error, which is the failure mode this project is built to avoid.
 - **Every kernel is validated against the scalar reference**, which is an
   independent implementation written from the specification. Agreement between
   them is evidence only because they share no code.
-- **Measured numbers live in `RESULTS.md` and nowhere else.** Other documents
-  link to an anchor rather than restating a figure, because restated figures
-  drift. Characterise results qualitatively in prose — "more than double the
-  best SIMD path" survives a re-measurement; "2.13x" does not.
+- **Measured numbers are tracked outside this repository**, and prose should
+  characterise results qualitatively — "more than double the best SIMD path"
+  survives a re-measurement; "2.13x" does not. A figure that genuinely carries
+  an argument must name its machine, compiler and date, because none of those
+  are recoverable later.
 
 ## Adding a kernel or an algorithm
 

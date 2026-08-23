@@ -42,8 +42,7 @@ sixteen words**, whatever the word size.
 SHA-1 costs more than MD5 because it runs 80 rounds and *expands* its sixteen
 message words to eighty rather than permuting them. SHA-512 costs more again:
 80 rounds of 64-bit work with four sigma functions, at half the lanes per
-register. Throughput for each, and which kernel wins:
-[RESULTS.md](RESULTS.md#algorithms).
+register.
 
 All three have OpenCL kernels, which makes one comparison possible that a
 single-algorithm benchmark would hide — **the GPU's advantage is not uniform**.
@@ -51,7 +50,7 @@ Both sides slow down on SHA-512 — AVX2's lanes halve at 64 bits too — but th
 GPU gives up substantially more of its relative footing, because consumer GPU
 ALUs are 32-bit and every 64-bit add and rotate is emulated. "Is the accelerator
 worth it" has no single answer even on fixed hardware:
-[the measured ratios](RESULTS.md#gpu-advantage).
+the measured ratios.
 
 ## Why MD5 is the default
 
@@ -60,7 +59,7 @@ Not for its cryptographic properties — it has none left. MD5 is used because
 
 Benchmarking SHA-1 or SHA-256 on a modern CPU measures the SHA-NI fixed-function
 unit, not the integer SIMD ALUs — on this machine that unit is worth more than
-double the best AVX2 path ([measured](RESULTS.md#shani)), and it is the reason
+double the best AVX2 path (measured), and it is the reason
 `--algorithm sha1` ships both kernels side by side rather than one. MD5 has no such accelerator on any architecture,
 so it is forced onto the general integer vector path everywhere, which is exactly
 what this benchmark is trying to measure. It also happens to lean on the specific
@@ -68,8 +67,8 @@ integer capabilities that separate ISA generations — 32-bit rotate and 3-input
 boolean logic — which makes it unusually good at exposing them.
 
 > Sample output blocks in this file show the *shape* of what the tool prints.
-> Their numbers are illustrative and not maintained; every measured result lives
-> in [RESULTS.md](RESULTS.md).
+> Their numbers are illustrative and not maintained. Run it on your own machine;
+> that is the only number that describes your machine.
 
 ## What the number means
 
@@ -118,27 +117,30 @@ between them is evidence rather than a tautology.
 
 ## Results
 
-Measured throughput lives in one place, [RESULTS.md](RESULTS.md), and the other
-documents link to it rather than restating figures. A sample — MD5, one thread,
-on three machines:
+Figures below are examples of what the tool reports, each naming the machine it
+came from. They are not a results database — this project deliberately does not
+ship one, because a number without its machine, compiler and workload is not
+comparable to anything. MD5, one thread:
 
 | | AMD EPYC 9R45 (Zen 5) | Intel Xeon 4210 | Intel N100 |
 |---|---:|---:|---:|
 | best kernel | `avx512-s4` | `avx512-s2` | `avx2-s2` |
 | MH/s | **344** | 178 | 43 |
 
-Two findings from those runs give the flavour of what the tool is for: AVX-512
-is worth [2.72x over AVX2](RESULTS.md#avx512) on a full-width datapath but only
-2.20x where the issue ports are shared, and the dedicated SHA-NI unit is
-[2.13x faster than the vector path on one core and 0.46x on another](RESULTS.md#shani-zen5)
-— the same instructions, opposite conclusions.
+*gcc 13.3 / 15.2 / 13.3, August 2026, 55-byte messages.*
+
+Two findings from those runs give the flavour of what the tool is for. AVX-512
+is worth **2.72x** over AVX2 on a full-width datapath but only **2.20x** where
+the issue ports are shared. And the dedicated SHA-NI unit is **2.13x** faster
+than the vector path on one core and **0.46x** as fast on another — the same
+instructions, opposite conclusions, which is the case against assuming rather
+than measuring.
 
 ## Documentation
 
 | | |
 |---|---|
 | [docs/guide.md](docs/guide.md) | Full usage: the three axes, sweeping, comparing runs, GPUs, energy, the PCIe crossover |
-| [RESULTS.md](RESULTS.md) | Every measured number, with the machine it came from |
 | [docs/design.md](docs/design.md) | What this measures, why MD5, and what measurement changed about the plan |
 | [docs/research.md](docs/research.md) | The decision log — every design choice with its reasoning, including the ones that turned out wrong |
 | [docs/schema.md](docs/schema.md) | The JSON and CSV output contracts, and the compatibility rule |
@@ -166,7 +168,7 @@ Known gaps, in the order they matter:
   order. The reported ratio already answers the pipelined question, so this
   concerns achieved throughput rather than correctness of the ratio.
 - **SVE and SVE2 have no kernel.** NEON is written, validated and
-  [measured on Graviton3](RESULTS.md#neon); the 256-bit SVE the same part offers
+  measured on Graviton3; the 256-bit SVE the same part offers
   is unused, and the NEON figures suggest there is headroom above them.
 
 ## Layout
@@ -182,7 +184,6 @@ Known gaps, in the order they matter:
 | [tools/sweep.py](tools/sweep.py) | Walks a parameter grid, writes CSV, solves for the PCIe balance point |
 | [tools/compare.py](tools/compare.py) | Diffs two result sets, gated on the verification checksum |
 | [tools/gpu_run.sh](tools/gpu_run.sh), [tools/cpu_run.sh](tools/cpu_run.sh) | One-command capture for a time-boxed session on rented hardware |
-| [RESULTS.md](RESULTS.md) | Every measured number; the other documents link here |
 | [docs/research.md](docs/research.md) | Background research and every design decision, with rationale |
 | [docs/design.md](docs/design.md) | What this measures and why, and what measurement changed about the plan |
 | [docs/dependencies.md](docs/dependencies.md) | Packages per distro, and the files they must provide |

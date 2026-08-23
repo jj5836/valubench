@@ -18,7 +18,7 @@ crossover, which is the second goal in [docs/design.md](design.md).
 
 Block-count boundaries dominate: crossing 55→56 bytes doubles the blocks and
 roughly halves hashes/sec, while compressions/sec — the real invariant — stays in
-a band ([measured](../RESULTS.md#axis-message)).
+a band (measured).
 
 Two-block messages are the worst case: the second block is nearly all padding,
 so half the compressions do almost no useful byte-work.
@@ -26,7 +26,7 @@ so half the compressions do almost no useful byte-work.
 ### Working set
 
 Sweeping `--working-set-kb` at fixed message length walks the corpus through the
-cache hierarchy ([measured](../RESULTS.md#axis-working-set)).
+cache hierarchy (measured).
 
 **MD5 barely becomes memory-bound.** Falling out of L2 costs about a tenth of
 throughput, and going to DRAM costs nothing further. That is the roofline
@@ -49,7 +49,7 @@ instruction mix and block count identical every time. It also means
 
 Compressions/sec stays flat while hashes/sec falls proportionally, which is what
 a linear compute knob should do
-([measured](../RESULTS.md#axis-iterations)).
+(measured).
 
 This is the compute axis; message length and working set are the others.
 
@@ -210,8 +210,8 @@ an even count would cancel to zero and silently weaken verification.
 
 Throughput was previously a function of `--working-set-kb`, which meant the
 memory axis and the occupancy axis were the same knob and the default
-under-reported the card several-fold ([before and
-after](../RESULTS.md#saturation)). It is now flat from about 4 MiB up, and the
+under-reported the card several-fold (before and
+after). It is now flat from about 4 MiB up, and the
 reported `kernel busy` fraction shows how much wall time was actually spent
 executing rather than launching:
 
@@ -227,7 +227,7 @@ turns that into GPU-scale parallelism. Sweeps amplify total work but not
 parallelism.
 
 The integrated GPU beats every CPU kernel on this chip by a wide margin —
-[by roughly 3.5x](../RESULTS.md#saturation).
+by roughly 3.5x.
 
 ### When a device number is not plausible
 
@@ -236,7 +236,7 @@ Three checks worth making before believing a GPU result:
 - **`verified` false anywhere.** Stop and investigate; nothing else matters.
 - **SHA-512 not dramatically slower than MD5.** Consumer GPU ALUs are 32-bit and
   emulate 64-bit integer work, so SHA-512 should fall off a cliff relative to
-  MD5 — [it does on the iGPU](../RESULTS.md#gpu-advantage). If a device shows no
+  MD5 — it does on the iGPU. If a device shows no
   such penalty, check that the kernel is really doing 64-bit work.
 - **A link rate well under the interface's capability.** PCIe 4.0 x16 from
   pageable memory should comfortably exceed 5 GB/s. A x8 negotiation or a gen3
@@ -262,7 +262,7 @@ usually does. Where counters are readable, runs report joules, watts and
 
 On the N100 the integrated GPU wins on both counts, and by more on efficiency
 than a throughput comparison alone would suggest:
-[hashes per joule per kernel](../RESULTS.md#energy). RAPL domains cross-check as
+hashes per joule per kernel. RAPL domains cross-check as
 they should, package bounding core plus uncore.
 
 Sources, all optional and all discovered at runtime:
@@ -406,9 +406,14 @@ Autotune:
   avx2-s4            ...
 ```
 
-Interleaving alone, with no change of instruction set, is worth **more than 3x**
-on the scalar path — the largest single win in this benchmark. The ladder is in
-[RESULTS.md](../RESULTS.md#streams).
+Interleaving alone, with no change of instruction set, is worth **1.70x** on a
+genuinely scalar path on an Intel N100 — 9.36 MH/s at one stream against 15.92
+at three. It peaks at three there and falls back at four, because four streams
+of MD5 state stop fitting in sixteen general-purpose registers.
+
+An earlier figure of 3.1x for this was wrong: the compiler was vectorising the
+scalar kernel, so the comparison was scalar against SSE2 rather than one stream
+against three.
 
 ### The one kernel where streams do not help
 
@@ -418,7 +423,7 @@ hash unit actually worth?
 
 `SHA1RNDS4` performs four real SHA-1 rounds in one instruction, so the register
 holds *one* message's state rather than a vector of messages — `lanes = 1`. It
-runs at [more than twice the best SIMD path](../RESULTS.md#shani) on the N100, and
+runs at more than twice the best SIMD path on the N100, and
 the stream ordering inverts with it: fewer streams are monotonically better.
 Everywhere else in this benchmark interleaving is the single biggest
 win; here a lone dependency chain already saturates the unit, so extra streams
@@ -436,7 +441,7 @@ be on a P-core.
 The same knob behaves in the opposite direction on the device, and it is worth
 knowing before porting a CPU kernel — SHA-1 loses an order of magnitude at four
 streams and SHA-512 halves at two
-([measured](../RESULTS.md#gpu-streams)).
+(measured).
 
 A GPU already has thousands of work-items in flight, so a second stream hides no
 latency that was not already hidden — it only adds live registers. SHA-1 and
@@ -475,7 +480,7 @@ $ ./tools/sweep.py --algorithm md5 --kernel md5/ocl-s1 --transfer stream \
       --message-bytes 64 --working-set-kb 262144 --iterations 1:1024:*2
 ```
 
-[The measured sweep](../RESULTS.md#crossover) walks from transfer-bound to
+The measured sweep walks from transfer-bound to
 compute-bound within the first few iterations, with the link rate flat
 throughout — which is the check that the link is being measured consistently
 rather than varying with the workload.
@@ -483,7 +488,7 @@ rather than varying with the workload.
 **The balance point is solved, not bracketed.** A geometric sweep only answers
 to within its own step. But transfer is constant in the iteration count and
 kernel time is linear in it, so `sweep.py` fits both and reports the intercept
-([what that looks like](../RESULTS.md#nstar)).
+(what that looks like).
 
 **Check `r2` before quoting N\*.** It has been 1.0000 on every sweep so far, so
 anything below about 0.98 means the linear model broke — the corpus fell out of
@@ -500,7 +505,7 @@ is fed back over the head of the message.
 
 N* is a property of the (kernel, working set) pair rather than of the kernel:
 doubling the corpus moved it measurably, because compute scales linearly while
-the achieved link rate does not ([both points](../RESULTS.md#nstar-ws)). Quote the
+the achieved link rate does not (both points). Quote the
 working set with it.
 
 **The ratio answers the question for a pipelined implementation too**, even
@@ -535,7 +540,7 @@ kernel — and a "CPU baseline" measured without it is quietly a GPU number.
 Both sides are linear in the iteration count, so break-even is solved rather
 than searched, exactly like N\*. If the device computes an iteration no faster
 than the CPU does, the curves never cross and the tool says so instead of
-extrapolating. [Measured on the development box](../RESULTS.md#break-even), where
+extrapolating. Measured on the development box, where
 the answer is sobering: against four cores rather than one, the iGPU's compute
 advantage collapses from 5.15x to roughly 1.6x, and offload only pays at all
 after a few iterations have amortised the upload.

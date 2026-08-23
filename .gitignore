@@ -26,3 +26,6 @@ __pycache__/
 # Planning notes, deliberately not published
 docs/roadmap.md
 build-*/
+
+# Measured results are tracked outside the repository for now.
+RESULTS.md

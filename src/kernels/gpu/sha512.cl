@@ -26,7 +26,8 @@
  * words, plus eight of chaining state, plus eight held for the digest feedback.
  * That is forty 64-bit values -- eighty 32-bit registers -- per stream before
  * any temporaries. `sha1/ocl` already fell off a 10x cliff between three streams
- * and four for exactly this reason (RESULTS.md, "streams on a GPU"); this kernel should
+ * and four for exactly this reason -- a device saturates on its own work
+ * decomposition long before four streams; this kernel should
  * be expected to fall off it earlier. The harness sweeps and measures rather
  * than assuming, so where the cliff lands is a result, not a problem.
  */

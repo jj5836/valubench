@@ -23,15 +23,17 @@ why they are worth stating before any change:
   pointless or harmful on AVX-512.
 - **`src/registry.c` is generated from the matrix** and never hand-edited.
 
-## Measured numbers live in RESULTS.md, and nowhere else
+## Measured numbers are tracked outside this repository
 
-Every benchmark figure belongs in `RESULTS.md` under an anchor; other documents
-link to it. This rule exists because they used to restate figures, and the
-copies drifted — the same table appeared in three files with two different sets
-of values.
+There is deliberately no results file in the tree. One existed, accumulated
+figures from five machines and three compilers, and became unmaintainable once
+a kernel bug invalidated a whole column of it — a durable format for tracking
+measurements is still being decided.
 
-When prose needs to characterise a result, do it qualitatively and link. "More
-than double the best SIMD path" survives a re-measurement; "2.13x" does not.
+Until then: **characterise results qualitatively in prose.** "More than double
+the best SIMD path" survives a re-measurement; "2.13x" does not. Where a figure
+genuinely carries an argument, state the machine, the compiler and the date
+alongside it, and expect to delete it when it goes stale.
 Sample output blocks are the one exception: they show the shape of what the tool
 prints and their numbers are illustrative rather than maintained.
 

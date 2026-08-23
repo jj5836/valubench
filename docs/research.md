@@ -420,7 +420,7 @@ for MD5: the algorithm happens to lean on precisely the integer capabilities tha
 separate ISA generations.
 
 **MEASURED, 2026-08-17** on a Xeon Silver 4210 (Cascade Lake), gcc 15.2 —
-[the figures](../RESULTS.md#avx512), consistent across thread counts.
+the figures, consistent across thread counts.
 
 **The direction was right and the magnitude estimate was not.** An earlier
 version of this section guessed "plausibly 3-4×"; the answer is a little over
@@ -433,7 +433,7 @@ instructions for 8 messages (387 of them boolean/shift work) against AVX-512's
 The shortfall is issue width, not instruction count. On Skylake-SP and Cascade
 Lake, 512-bit operations execute on fewer ports than 256-bit ones — ports 0 and 1
 fuse to serve one 512-bit unit — so doubling the register width does not double
-the issue rate. Getting the measured 2.20× ([../RESULTS.md](../RESULTS.md#avx512))
+the issue rate. Getting the measured 2.20×
 from a 2.67× instruction reduction implies roughly 0.82× the instructions retired
 per cycle, which is what that port arrangement predicts.
 
@@ -446,7 +446,7 @@ be better there. Both are reasons to expect this number to move on other
 hardware, not reasons to distrust it here.
 
 **MEASURED, 2026-08-22, on AMD Zen 5 — the explanation holds.** An EPYC 9R45
-gives 2.72x ([../RESULTS.md](../RESULTS.md#avx512)), above the 2.67x instruction
+gives 2.72x, above the 2.67x instruction
 reduction rather than below it, which is what the port-fusion account predicts
 for a part that does not fuse. The same run settles the width question in
 isolation: AVX2 over SSE2 is 1.93x there against ~1.06x on Gracemont, so a
@@ -456,7 +456,7 @@ separable across the three machines.
 
 The downclocking caveat survives -- that instance is also a VM -- but its
 consequence is now bounded: the AVX-512 advantage is 2.71x at one thread and
-2.71x at sixteen ([../RESULTS.md](../RESULTS.md#avx512-threads)), so whatever the part
+2.71x at sixteen, so whatever the part
 does to its clock under 512-bit load, it is not taking the ratio back.
 
 Note also that the `MD5_H1`/`MD5_H2` XOR-sharing trick from §2.2(b) becomes
@@ -477,7 +477,7 @@ message expansion. There is nothing left for a kernel template to do, and the
 so this path is `lanes = 1` and every other kernel here is not.
 
 **MEASURED, 2026-08-17** on an Intel N100 (Gracemont E-core), gcc 13.3, single
-thread at 2.9 GHz — [the four SHA-1 paths](../RESULTS.md#shani), from one lane to
+thread at 2.9 GHz — the four SHA-1 paths, from one lane to
 the fixed-function unit.
 
 Two findings, the second more interesting than the first.
@@ -492,7 +492,7 @@ the SHA extension.
 **MEASURED, 2026-08-22 — and the speculation was too cautious.** It does not
 take a core lacking a SHA unit: an AMD EPYC 9R45 *has* SHA-NI, and its own
 AVX-512 path beats it by 2.2x, putting the ratio at **0.46x**
-([../RESULTS.md](../RESULTS.md#shani-zen5)). Across the two machines the same
+. Across the two machines the same
 comparison spans 4.6x, from 2.13x to 0.46x, with the SHA extension unchanged
 throughout. "What is a fixed-function unit worth" is therefore not a question
 about the unit at all; it is a question about what sits beside it. This is the
@@ -502,12 +502,10 @@ throughput on this part.
 
 **2. Stream interleaving is worthless on SHA-NI — uniquely.** Interleaving
 independent dependency chains is the single most load-bearing optimisation in
-this benchmark on the machine it was found on -- 3.1x on the N100 scalar path
-([../RESULTS.md](../RESULTS.md#streams)), though only 1.17x on Zen 5, whose
-out-of-order window already extracts what interleaving was arranging by hand
-([../RESULTS.md](../RESULTS.md#streams-zen5)) -- and every other
+this benchmark -- 1.70x on a genuinely scalar path on the N100, and every
+other
 kernel peaks at 2-4 streams. On SHA-NI the ordering inverts and is monotonic
-([the ladder](../RESULTS.md#shani)).
+(the ladder).
 
 A single chain already saturates the unit. Working backwards from the measured
 rate: ~63 cycles per 64-byte block, over 20 `SHA1RNDS4` instructions, so ~3.1
@@ -705,7 +703,7 @@ Resolved in discussion on 2026-08-16, before implementation began.
    **Measured negative result worth recording:** MD5 barely becomes memory
    bound. On the N100 with 1015-byte messages, moving the working set from
    L2-resident to 128 MiB costs only about a tenth of throughput
-   ([measured](../RESULTS.md#axis-working-set)), and DRAM is no worse than L3. One
+   (measured), and DRAM is no worse than L3. One
    compression is several hundred integer ops per 64 bytes, so operational
    intensity is high enough that this workload sits far right of the roofline
    ridge point on essentially any machine. Locating a genuine bandwidth-bound

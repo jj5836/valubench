@@ -1,7 +1,7 @@
 # Changelog
 
-Notable changes. Measured figures are not repeated here — they live in
-[RESULTS.md](RESULTS.md), which records the machine each came from.
+Notable changes. Measured figures are not recorded here; they are tracked
+outside this repository while a durable format for them is decided.
 
 ## Unreleased
 
@@ -13,9 +13,8 @@ Notable changes. Measured figures are not repeated here — they live in
   baseline every ISA ratio divides by depended on the compiler. That translation
   unit is now built with `-fno-tree-vectorize -fno-tree-slp-vectorize`, and
   `make check` disassembles the result and fails if more than 5% of its
-  instructions touch a vector register. Scalar figures measured before this are
-  marked in [RESULTS.md](RESULTS.md#scalar-baseline) and should not be used as
-  denominators.
+  instructions touch a vector register. Any scalar figure measured before this
+  is not a scalar baseline and must not be used as a denominator.
 
 ## 0.5.0 — 2026-08-23
 
