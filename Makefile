@@ -295,6 +295,9 @@ $(BUILD)/ocl_%.o: src/opencl/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
 $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/test_report_json.o: tests/test_report_json.c $(HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/test_checkpoints.o: tests/test_checkpoints.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -333,13 +336,23 @@ $(BUILD)/test_checkpoints: $(BUILD)/test_checkpoints.o $(BUILD)/workload.o \
                            $(BUILD)/algorithm.o $(REF_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(BUILD)/test_report_json: $(BUILD)/test_report_json.o $(CORE_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+check-report: $(BUILD)/test_report_json
+	@$(BUILD)/test_report_json
+
+check-contract: $(BUILD)/valubench
+	@sh tests/check_output_contract.sh $(BUILD)/valubench .
+
 check-checkpoints: $(BUILD)/test_checkpoints
 	@$(BUILD)/test_checkpoints
 
 check-working-set: $(BUILD)/valubench
 	@sh tests/check_working_set.sh $(BUILD)/valubench
 
-check: test check-kernels check-scalar check-checkpoints check-working-set
+check: test check-kernels check-scalar check-checkpoints check-working-set \
+       check-report check-contract
 
 clean:
 	rm -rf $(BUILD)

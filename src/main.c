@@ -15,6 +15,8 @@
 #include "sysinfo.h"
 #include "opencl.h"
 
+#include <errno.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,6 +159,56 @@ static int need_arg(int i, int argc, const char *flag)
 }
 
 /*
+ * Parse an unsigned option argument, or fail.
+ *
+ * atoi() was used here and has no error return: a non-numeric argument becomes
+ * 0 and a partly-numeric one is truncated, so `--threads abc` ran on one thread
+ * and `--message-bytes 12x` measured twelve bytes. Neither was rejected, and the
+ * JSON then recorded the substituted value as though it had been asked for --
+ * which turns a typo in a sweep script into a result that looks deliberate.
+ *
+ * Rejects: empty strings, anything with trailing characters, negatives, and
+ * values outside [lo, hi]. Leading whitespace is allowed because strtoul allows
+ * it and a shell can introduce it.
+ */
+static int parse_uint(const char *flag, const char *arg,
+                      unsigned long lo, unsigned long hi, unsigned *out)
+{
+    char *end = NULL;
+
+    if (!arg || !*arg) {
+        fprintf(stderr, "valubench: %s needs a number\n", flag);
+        return 0;
+    }
+    /* strtoul happily wraps a negative into a huge unsigned; catch the sign
+       before it can. */
+    for (const char *p = arg; *p; p++) {
+        if (*p == '-') {
+            fprintf(stderr, "valubench: %s must not be negative (got '%s')\n",
+                    flag, arg);
+            return 0;
+        }
+        if (!isspace((unsigned char) *p))
+            break;
+    }
+
+    errno = 0;
+    unsigned long v = strtoul(arg, &end, 10);
+
+    if (end == arg || (end && *end)) {
+        fprintf(stderr, "valubench: %s wants a number, got '%s'\n", flag, arg);
+        return 0;
+    }
+    if (errno == ERANGE || v < lo || v > hi) {
+        fprintf(stderr, "valubench: %s must be between %lu and %lu (got '%s')\n",
+                flag, lo, hi, arg);
+        return 0;
+    }
+    *out = (unsigned) v;
+    return 1;
+}
+
+/*
  * Listing is an action rather than a run, but it cannot happen while the
  * command line is still being read: `--list --json` and `--json --list` have to
  * mean the same thing, and they did not when --list returned from inside the
@@ -241,25 +293,32 @@ int main(int argc, char **argv)
             cfg.force_kernel = argv[++i];
         } else if (!strcmp(a, "--threads")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.threads = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 1, VB_MAX_THREADS, &cfg.threads))
+                return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--iterations")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.iterations = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 1, 1u << 24, &cfg.iterations))
+                return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--message-bytes")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.message_bytes = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 1, 1u << 20, &cfg.message_bytes))
+                return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--working-set-kb")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.working_set_kb = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 1, 1u << 24, &cfg.working_set_kb))
+                return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--samples")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.n_samples = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 1, VB_MAX_SAMPLES, &cfg.n_samples))
+                return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--time-ms")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.target_ms = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 1, 3600000, &cfg.target_ms))
+                return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--warmup-ms")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            cfg.warmup_ms = (unsigned) atoi(argv[++i]);
+            if (!parse_uint(a, argv[++i], 0, 3600000, &cfg.warmup_ms))
+                return VB_EXIT_USAGE;
         } else {
             fprintf(stderr, "valubench: unknown option '%s'\n", a);
             usage(stderr, argv[0]);

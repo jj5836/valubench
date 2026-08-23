@@ -35,6 +35,14 @@ jobs:
       # A GitHub runner is a shared VM, so the throughput figure is worthless.
       # This runs the shortest possible measurement purely to prove the binary
       # executes end to end and verifies its own output.
+      # The kernel checks prove the numbers are right. These prove the output
+      # can be read at all: every JSON document parses, every documented exit
+      # code is the one actually returned, bad arguments are rejected rather
+      # than substituted, and sweep.py can still drive the binary. Two defects
+      # found by review lived in exactly this gap.
+      - name: output contract and argument validation
+        run: make check-contract check-report
+
       - name: smoke run
         run: |
           ./build/valubench --samples 3 --time-ms 40 --warmup-ms 50 || \

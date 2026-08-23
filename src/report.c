@@ -239,11 +239,17 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
             fprintf(f, "    \"hashes_per_joule\": %.6g,\n",
                     (double) r->total_hashes / total);
 
+        /* Count what has been emitted, not what has been iterated. Separating
+           on the loop index emits a leading comma whenever the first source is
+           invalid and a later one is not -- "sources": [, {...}] -- which no
+           parser accepts, and which breaks the machine-readable contract on a
+           machine nobody happened to have. */
         fprintf(f, "    \"sources\": [");
+        int emitted = 0;
         for (int i = 0; i < r->power.n; i++) {
             if (!r->power.src[i].valid)
                 continue;
-            fprintf(f, "%s{\"name\": ", i ? ", " : "");
+            fprintf(f, "%s{\"name\": ", emitted++ ? ", " : "");
             json_str(f, r->power.src[i].name);
             fprintf(f, ", \"scope\": \"%s\", \"joules\": %.4g}",
                     vb_power_scope_name(r->power.src[i].scope),
