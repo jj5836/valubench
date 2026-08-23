@@ -603,11 +603,14 @@ if rows:
             ks.append(k)
         by.setdefault(w, {})[k] = (float(r["hashes_per_sec"]) / 1e6,
                                    float(r["message_bytes_per_sec"]) / 1e9)
-    print("      %10s %s" % ("WS MiB", "".join("%16s" % k.split("/")[1] for k in ks)))
+    def ws(kb):
+        return "%d MiB" % (kb // 1024) if kb >= 1024 else "%d KiB" % kb
+    print("      %10s %s" % ("working set",
+                             "".join("%16s" % k.split("/")[1] for k in ks)))
     for w in sorted(by):
         cells = "".join("%10.1f MH/s" % by[w][k][0] if k in by[w] else "%16s" % "-"
                         for k in ks)
-        print("      %10.0f %s" % (w / 1024.0, cells))
+        print("      %10s %s" % (ws(w), cells))
     for k in ks:
         vals = [by[w][k][0] for w in sorted(by) if k in by[w]]
         gbs  = [by[w][k][1] for w in sorted(by) if k in by[w]]

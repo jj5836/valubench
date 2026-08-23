@@ -78,8 +78,10 @@ Two caveats that matter more than the ratio itself:
 - **Stream interleaving does nothing here, and that is itself the finding.**
   Interleaving is the single largest win in the benchmark everywhere else,
   though how many streams pay depends on the algorithm: MD5 wants four, SHA-1
-  two, SHA-512 one or two, set by how much live state a stream carries against
-  the register file. On SHA-NI more streams are monotonically *worse*
+  two, SHA-512 one or two, ordered by how much live state a stream carries.
+  That ordering holds on x86-64 and AArch64 alike; the peak itself moves between
+  cores in ways register count alone does not predict. On SHA-NI more streams
+  are monotonically *worse*
   (the ladder). A single dependency chain already saturates
   the unit, so `SHA1RNDS4`'s reciprocal throughput must be close to its latency.
   Extra streams buy nothing and cost registers.
