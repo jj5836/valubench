@@ -475,16 +475,24 @@ if [ "$HAVE_RAPL" = 0 ]; then
     note "no readable energy counter -- skipped. See the note in the environment"
     note "section above; on AMD this may be a naming mismatch rather than absence."
 else
+    # Two working sets per kernel, not one. C7 showed a 512-bit kernel losing 44%
+    # once the corpus leaves the last-level cache, which means it spends that
+    # time waiting on DRAM -- and a kernel waiting on memory is still burning
+    # power. Whether stalling is cheaper or dearer per hash than computing is a
+    # question no VM in this project could answer for want of RAPL.
     for k in $(rungs 2); do
-        tag=$(echo "$k" | tr '/' '-')
-        "$BIN" --kernel "$k" --threads 1 --json --samples "$SAMPLES" \
-               --time-ms "$TIME_MS" --warmup-ms "$WARMUP" \
-               > "$OUT/c3-energy-$tag.json" 2>&1
+        for ws in 1024 262144; do
+            tag=$(echo "$k-$ws" | tr '/' '-')
+            "$BIN" --kernel "$k" --threads 1 --working-set-kb "$ws" --json \
+                   --samples "$SAMPLES" --time-ms "$TIME_MS" \
+                   --warmup-ms "$WARMUP" > "$OUT/c3-energy-$tag.json" 2>&1
+        done
     done
     python3 - "$OUT"/c3-energy-*.json <<'PY' | show
 import json, sys
 rows = []
-print("      %-16s %10s %12s %10s" % ("kernel", "MH/s", "kH/J", "watts"))
+print("      %-16s %8s %10s %12s %10s"
+      % ("kernel", "WS MiB", "MH/s", "kH/J", "watts"))
 for p in sys.argv[1:]:
     try:
         d = json.load(open(p))
@@ -492,23 +500,37 @@ for p in sys.argv[1:]:
         continue
     e = d.get("energy", {})
     if not e.get("available"):
-        print("      %-16s %10.2f   (no energy: %.60s)"
+        print("      %-16s %10.2f   (no energy: %.50s)"
               % (d["kernel"]["name"], d["result"]["median"]/1e6,
                  e.get("reason", "unknown")))
         continue
-    rows.append((d["kernel"]["name"], d["result"]["median"]/1e6,
+    ws = d["parameters"]["working_set_bytes"] / (1024.0 * 1024.0)
+    rows.append((d["kernel"]["name"], ws, d["result"]["median"]/1e6,
                  e.get("hashes_per_joule", 0), e.get("cpu_package_watts", 0)))
-    print("      %-16s %10.2f %12.0f %10.1f"
-          % (rows[-1][0], rows[-1][1], rows[-1][2]/1e3, rows[-1][3]))
+    print("      %-16s %8.0f %10.2f %12.0f %10.1f"
+          % (rows[-1][0], ws, rows[-1][2], rows[-1][3]/1e3, rows[-1][4]))
 
 # Throughput and efficiency can disagree, and only one of them settles a
-# purchasing question, so print both ratios rather than leaving it to the eye.
-if len(rows) >= 2:
-    a, b = sorted(rows, key=lambda r: -r[1])[:2]
-    print("      %s" % ("-" * 52))
-    print("      %s / %s: %.2fx throughput, %.2fx energy efficiency"
-          % (a[0].split("/")[1], b[0].split("/")[1],
-             a[1] / b[1] if b[1] else 0, a[2] / b[2] if b[2] else 0))
+# purchasing question, so state both rather than leaving it to the eye.
+print("      %s" % ("-" * 62))
+by_ws = {}
+for name, ws, mhs, hpj, w in rows:
+    by_ws.setdefault(round(ws), []).append((name, mhs, hpj, w))
+for ws in sorted(by_ws):
+    v = sorted(by_ws[ws], key=lambda r: -r[1])
+    if len(v) >= 2 and v[1][1] and v[1][2]:
+        print("      at %4d MiB: %s / %s = %.2fx throughput, %.2fx efficiency"
+              % (ws, v[0][0].split("/")[1], v[1][0].split("/")[1],
+                 v[0][1] / v[1][1], v[0][2] / v[1][2]))
+# The new question: is a kernel that stalls on DRAM cheaper or dearer per hash?
+for name in sorted({r[0] for r in rows}):
+    pair = sorted([r for r in rows if r[0] == name], key=lambda r: r[1])
+    if len(pair) == 2 and pair[0][3] and pair[1][3]:
+        small, big = pair
+        print("      %-16s cache-resident to DRAM: %.2fx throughput, "
+              "%.2fx efficiency, %.1f -> %.1f W"
+              % (name.split("/")[1], big[2] / small[2] if small[2] else 0,
+                 big[3] / small[3], small[4], big[4]))
 PY
 fi
 
