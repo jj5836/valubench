@@ -134,13 +134,6 @@ uint64_t vb_batch_messages(const vb_config *cfg)
     return n;
 }
 
-uint64_t vb_working_set_bytes(const vb_config *cfg)
-{
-    return vb_batch_messages(cfg)
-         * (uint64_t) vb_alg_blocks_for(cfg->alg, cfg->message_bytes)
-         * cfg->alg->block_bytes;
-}
-
 /* ---- worker pool -------------------------------------------------------- */
 
 typedef struct vb_pool vb_pool;
@@ -733,8 +726,13 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     out->alg = cfg->alg;
     out->blocks = corpus->blocks;
     out->batch_messages = corpus->n_messages;
-    out->working_set_bytes =
-        corpus->n_messages * (uint64_t) corpus->blocks * 64u;
+    /* Not 64: SHA-512 has 128-byte blocks, and hardcoding the MD5/SHA-1 size
+       here reported half the corpus for it. The corpus knows its own algorithm;
+       ask it rather than assuming. A second implementation of this arithmetic
+       used to exist in vb_working_set_bytes(), correct and never called, which
+       is how the two came to disagree unnoticed; it is gone. */
+    out->working_set_bytes = corpus->n_messages * (uint64_t) corpus->blocks
+                           * corpus->alg->block_bytes;
 
     vb_power_open(&out->power);
 

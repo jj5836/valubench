@@ -326,7 +326,10 @@ OBJDUMP ?= $(shell echo $(CC) | sed 's/g\?cc$$/objdump/;s/clang/objdump/')
 check-scalar: $(BUILD)/kernel_scalar.o
 	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)
 
-check: test check-kernels check-scalar
+check-working-set: $(BUILD)/valubench
+	@sh tests/check_working_set.sh $(BUILD)/valubench
+
+check: test check-kernels check-scalar check-working-set
 
 clean:
 	rm -rf $(BUILD)

@@ -38,7 +38,9 @@ typedef struct {
     unsigned threads;
     unsigned iterations;
     unsigned message_bytes;
-    unsigned blocks;              /* 512-bit blocks per message */
+    unsigned blocks;              /* compression blocks per message; the
+                                     block size is the algorithm's, 64 bytes
+                                     for MD5 and SHA-1, 128 for SHA-512 */
     uint64_t batch_messages;
     uint64_t working_set_bytes;   /* size of the message corpus */
 
@@ -157,9 +159,10 @@ unsigned vb_online_cpus(void);
  */
 int vb_batch_divides(const vb_kernel *k);
 
-/* Messages in the verified batch, and the corpus size that implies. */
+/* Messages in the verified batch. The corpus size that implies is computed
+   where the corpus is measured, from the corpus itself, so that the reported
+   number describes what was actually built. */
 uint64_t vb_batch_messages(const vb_config *cfg);
-uint64_t vb_working_set_bytes(const vb_config *cfg);
 
 /*
  * Validate a kernel against the scalar reference over the whole corpus.

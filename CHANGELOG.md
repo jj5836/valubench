@@ -7,6 +7,28 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **SHA-512 reported half its working set.** The result path computed corpus
+  size with a hardcoded 64-byte block, which is right for MD5 and SHA-1 and half
+  the truth for SHA-512's 128-byte blocks. The corpus was always *built* at the
+  correct size, so no throughput figure was wrong — but working set is one of
+  the three axes this benchmark sweeps, and the reported number decides which
+  side of a cache a measurement is read as sitting on. It now comes from the
+  algorithm, and `make check` verifies the reported figure against
+  `batch_messages x blocks x block_bytes` for every algorithm at each padding
+  boundary.
+
+  A second, correct implementation of the same arithmetic existed in
+  `vb_working_set_bytes()` and had no callers, which is how the two could
+  disagree unnoticed; it has been removed rather than wired up, because the
+  reported figure should describe the corpus that was built rather than one
+  recomputed from the request.
+
+  **Comparing SHA-512 results across this fix**: `tools/compare.py` treats
+  working set as part of a measurement's identity, so a pre-fix SHA-512 row will
+  not pair with a post-fix one even when the runs were otherwise identical. That
+  is the tool being right — the two labels genuinely differ — but it means
+  archived SHA-512 comparisons need the older side's figure doubled first.
+
 - **The scalar kernel was not scalar.** At `-O2`, GCC's SLP vectoriser fused the
   independent streams and emitted SSE2 on x86-64 and NEON on AArch64 — 88% and
   79% of the two-stream kernel's instructions — while clang did not, so the
