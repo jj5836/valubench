@@ -295,6 +295,9 @@ $(BUILD)/ocl_%.o: src/opencl/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
 $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/test_checkpoints.o: tests/test_checkpoints.c $(HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/test_kernels.o: tests/test_kernels.c $(HDRS)
 	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
 
@@ -326,10 +329,17 @@ OBJDUMP ?= $(shell echo $(CC) | sed 's/g\?cc$$/objdump/;s/clang/objdump/')
 check-scalar: $(BUILD)/kernel_scalar.o
 	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)
 
+$(BUILD)/test_checkpoints: $(BUILD)/test_checkpoints.o $(BUILD)/workload.o \
+                           $(BUILD)/algorithm.o $(REF_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+check-checkpoints: $(BUILD)/test_checkpoints
+	@$(BUILD)/test_checkpoints
+
 check-working-set: $(BUILD)/valubench
 	@sh tests/check_working_set.sh $(BUILD)/valubench
 
-check: test check-kernels check-scalar check-working-set
+check: test check-kernels check-scalar check-checkpoints check-working-set
 
 clean:
 	rm -rf $(BUILD)

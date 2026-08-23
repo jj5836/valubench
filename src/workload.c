@@ -235,39 +235,71 @@ void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
     free(sl); free(tid);
 }
 
+/*
+ * Checksums for several iteration counts in one pass.
+ *
+ * The iteration scheme is a chain: hash, write the digest over the head of the
+ * message, hash again. So the digest after k iterations is a *prefix* of the
+ * chain for any larger k, and a sweep that asks for 1, 2, 4 ... 1024 iterations
+ * is asking for the same chain over and over. Walking each message once to the
+ * largest count and snapshotting at each requested one replaces the whole
+ * ladder: 1024 passes instead of 2068 for a typical crossover sweep, and half
+ * that again where the device and CPU sides ask for the same counts.
+ *
+ * `iters` must be ascending and non-empty. `out` receives one checksum per
+ * entry.
+ */
+void vb_reference_checksums(const vb_algorithm *alg, uint32_t start,
+                            uint64_t count, uint32_t message_bytes,
+                            const uint32_t *iters, unsigned n_iters,
+                            uint64_t out[][VB_MAX_DIGEST_WORDS])
+{
+    uint8_t *msg = malloc(message_bytes);
+
+    memset(out, 0, (size_t) n_iters * VB_MAX_DIGEST_WORDS * sizeof(uint64_t));
+    if (!msg || n_iters == 0)
+        return;
+
+    uint32_t maxit = iters[n_iters - 1];
+
+    for (uint64_t n = 0; n < count; n++) {
+        uint8_t digest[VB_MAX_DIGEST_BYTES];
+        unsigned k = 0;
+
+        vb_build_message(start + (uint32_t) n, message_bytes, msg);
+
+        for (uint32_t it = 0; it < maxit; it++) {
+            alg->hash(msg, message_bytes, digest);
+
+            /* Snapshot every checkpoint that lands on this iteration. The
+               guard is a while rather than an if so a duplicated count in
+               `iters` is handled rather than silently skipped. */
+            while (k < n_iters && iters[k] == it + 1) {
+                for (unsigned j = 0; j < alg->digest_words; j++)
+                    out[k][j] ^= load_word(alg,
+                                           digest + (size_t) j * alg->word_bytes);
+                k++;
+            }
+
+            /* Feed the digest back over the head of the message, leaving the
+               rest intact, so every iteration is identical work. Callers
+               guarantee message_bytes >= digest_bytes when iterations > 1. */
+            if (it + 1 < maxit)
+                memcpy(msg, digest, alg->digest_bytes);
+        }
+    }
+
+    free(msg);
+}
+
 void vb_reference_checksum(const vb_algorithm *alg, uint32_t start,
                            uint64_t count, uint32_t message_bytes,
                            uint32_t iterations,
                            uint64_t checksum[VB_MAX_DIGEST_WORDS])
 {
-    uint64_t acc[VB_MAX_DIGEST_WORDS] = { 0 };
-    uint8_t *msg = malloc(message_bytes);
-
-    if (!msg) {
-        memset(checksum, 0, VB_MAX_DIGEST_WORDS * sizeof(uint64_t));
-        return;
-    }
-
-    for (uint64_t n = 0; n < count; n++) {
-        uint8_t digest[VB_MAX_DIGEST_BYTES];
-
-        vb_build_message(start + (uint32_t) n, message_bytes, msg);
-
-        for (uint32_t it = 0; it < iterations; it++) {
-            alg->hash(msg, message_bytes, digest);
-            /* Feed the digest back over the head of the message, leaving the
-               rest intact, so every iteration is identical work. Callers
-               guarantee message_bytes >= digest_bytes when iterations > 1. */
-            if (it + 1 < iterations)
-                memcpy(msg, digest, alg->digest_bytes);
-        }
-
-        /* Accumulate the digest as the algorithm's own words, so the value
-           matches what a kernel carrying that state XORs together. */
-        for (unsigned j = 0; j < alg->digest_words; j++)
-            acc[j] ^= load_word(alg, digest + (size_t) j * alg->word_bytes);
-    }
-
-    free(msg);
-    memcpy(checksum, acc, sizeof acc);
+    /* One checkpoint is the general case with n_iters == 1. Keeping a single
+       implementation means the ladder and the single value cannot drift. */
+    vb_reference_checksums(alg, start, count, message_bytes,
+                           &iterations, 1,
+                           (uint64_t (*)[VB_MAX_DIGEST_WORDS]) checksum);
 }

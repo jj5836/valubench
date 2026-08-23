@@ -204,6 +204,15 @@ void vb_reference_checksum(const vb_algorithm *alg, uint32_t start,
                            uint32_t iterations,
                            uint64_t checksum[VB_MAX_DIGEST_WORDS]);
 
+/* Checksums for several iteration counts in one pass over the corpus. The
+   digest after k iterations is a prefix of the chain for any larger k, so a
+   ladder costs one walk to its largest count rather than one walk per rung.
+   `iters` must be ascending. */
+void vb_reference_checksums(const vb_algorithm *alg, uint32_t start,
+                            uint64_t count, uint32_t message_bytes,
+                            const uint32_t *iters, unsigned n_iters,
+                            uint64_t out[][VB_MAX_DIGEST_WORDS]);
+
 void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
                               uint64_t count, uint32_t message_bytes,
                               uint32_t iterations, unsigned threads,
