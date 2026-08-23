@@ -923,11 +923,25 @@ fi
 
 if [ "$NDEV" -gt 1 ]; then
     say "D4  multi-device  ($NDEV devices)"
-    note "the slicing path has never run with more than one device; the"
-    note "checksum must match the single-device value exactly."
-    "$BIN" --json --kernel md5/ocl-s1 --device 0 --working-set-kb 65536 \
+    note "the checksum must match the single-device value exactly: equality"
+    note "proves the slices tile the corpus with no gaps and no overlaps."
+    #
+    # The corpus is held constant PER DEVICE, so the total grows with the device
+    # count. --working-set-kb is a total everywhere else, and splitting a fixed
+    # total starves each device as more are added: on 2xH100 that put 32 MiB on
+    # each, where a GPU needs ~256 MiB to saturate, and the resulting 1.70x read
+    # like a scaling limit when it was an underfed slice.
+    #
+    # It also makes the more interesting measurement. Fixed-per-device means
+    # total PCIe traffic scales with the device count, so if the host bus is the
+    # constraint, aggregate throughput stops scaling and says so. A fixed total
+    # cannot distinguish that from starvation.
+    D4_WS=65536
+    D4_WS_ALL=$(( D4_WS * NDEV ))
+    note "corpus held at ${D4_WS} KiB per device: ${D4_WS} for one, ${D4_WS_ALL} for $NDEV"
+    "$BIN" --json --kernel md5/ocl-s1 --device 0 --working-set-kb "$D4_WS" \
         --samples "$SAMPLES" --time-ms "$TIME_MS" > "$OUT/d4-one-device.json" 2>>"$LOG"
-    "$BIN" --json --kernel md5/ocl-s1 --device all --working-set-kb 65536 \
+    "$BIN" --json --kernel md5/ocl-s1 --device all --working-set-kb "$D4_WS_ALL" \
         --samples "$SAMPLES" --time-ms "$TIME_MS" > "$OUT/d4-all-devices.json" 2>>"$LOG"
     python3 - "$OUT/d4-one-device.json" "$OUT/d4-all-devices.json" <<'PY' | show
 import json, sys
@@ -939,8 +953,16 @@ ca, cb = a["verification"]["checksum"], b["verification"]["checksum"]
 print("      1 device   %8.2f MH/s  %s" % (a["result"]["median"]/1e6, ca[:16]))
 print("      %d devices  %8.2f MH/s  %s" % (b["device"]["device_count"] if "device_count" in b.get("device",{}) else 0,
                                             b["result"]["median"]/1e6, cb[:16]))
-print("      checksums %s" % ("MATCH" if ca == cb else "*** DIFFER -- slicing is wrong ***"))
-print("      scaling   %.2fx" % (b["result"]["median"]/a["result"]["median"]))
+print("      checksums %s" % ("MATCH -- the slices tile the corpus" if ca == cb
+                              else "*** DIFFER -- slicing is wrong ***"))
+n = b.get("device", {}).get("device_count", 0) or 1
+sc = b["result"]["median"] / a["result"]["median"]
+print("      scaling   %.2fx over %d devices (%.0f%% of linear), corpus held"
+      " constant per device" % (sc, n, 100.0 * sc / n))
+if n > 1 and sc < 0.9 * n:
+    print("      the shortfall is not starvation -- each device has the same")
+    print("      corpus it had alone -- so look at the host link or the launch")
+    print("      path. Total transfer scaled %dx with the device count." % n)
 PY
 fi
 fi   # DO_DEV
