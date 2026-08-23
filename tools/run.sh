@@ -306,6 +306,30 @@ else
 fi
 
 if [ "$DO_CPU" = 1 ]; then
+# The best kernel per ISA rung, widest first, from the ladder C1 measures.
+# Phases that want "the widest kernel and the one below it" ask this rather than
+# naming kernels, because a named kernel is wrong on any machine that does not
+# have it -- silently on x86 without AVX-512, and fatally on AArch64.
+rungs() {
+    python3 - "$OUT/c1-isa-ladder.csv" "${1:-9}" 2>/dev/null <<'PY'
+import csv, sys
+ORDER = ["scalar", "sse2", "avx2", "avx512", "neon", "sve", "sve2"]
+try:
+    rows = [r for r in csv.DictReader(open(sys.argv[1])) if r["hashes_per_sec"]]
+except OSError:
+    rows = []
+best = {}
+for r in rows:
+    isa = r["kernel"].split("/")[1].split("-")[0]
+    v = float(r["hashes_per_sec"])
+    if v > best.get(isa, (0, ""))[0]:
+        best[isa] = (v, r["kernel"])
+wide = sorted(best, key=lambda i: ORDER.index(i) if i in ORDER else -1,
+              reverse=True)
+print(" ".join(best[i][1] for i in wide[:int(sys.argv[2])]))
+PY
+}
+
 # ------------------------------------------------- C1: the ISA ladder (headline)
 
 say "C1  ISA ladder, single thread  (the headline)"
@@ -404,9 +428,26 @@ else
     note "one core loaded, sampling cpu0 every 250 ms for ~${FREQ_SECS}s per kernel."
     note "scalar is the non-vector baseline; the question is whether the"
     note "widest kernel sits below it and below the next rung down."
-    sample_freq scalar md5/scalar-s4
-    sample_freq avx2   md5/avx2-s3
-    [ "$HAVE512" = 1 ] && sample_freq avx512 md5/avx512-s2
+    # The widest two rungs and the scalar one: the comparison is between a
+    # vector kernel and something that cannot trigger a licence transition.
+    for k in $(rungs 2); do
+        sample_freq "$(echo "$k" | sed 's|.*/||;s|-s[0-9]*$||')" "$k"
+    done
+    SCALARK=$(python3 - "$OUT/c1-isa-ladder.csv" 2>/dev/null <<'PY'
+import csv, sys
+try:
+    rows = [r for r in csv.DictReader(open(sys.argv[1]))
+            if r["hashes_per_sec"] and "/scalar-" in r["kernel"]]
+except OSError:
+    rows = []
+if rows:
+    print(max(rows, key=lambda r: float(r["hashes_per_sec"]))["kernel"])
+PY
+)
+    case " $(rungs 2) " in
+        *" $SCALARK "*) ;;
+        *) [ -n "$SCALARK" ] && sample_freq scalar "$SCALARK" ;;
+    esac
     note "a lower mean under the wider kernel is the downclock; equal means none"
 fi
 
@@ -417,8 +458,7 @@ if [ "$HAVE_RAPL" = 0 ]; then
     note "no readable energy counter -- skipped. See the note in the environment"
     note "section above; on AMD this may be a naming mismatch rather than absence."
 else
-    for k in md5/avx2-s3 md5/avx512-s2; do
-        [ "$HAVE512" = 0 ] && [ "${k#*avx512}" != "$k" ] && continue
+    for k in $(rungs 2); do
         tag=$(echo "$k" | tr '/' '-')
         "$BIN" --kernel "$k" --threads 1 --json --samples "$SAMPLES" \
                --time-ms "$TIME_MS" --warmup-ms "$WARMUP" \
@@ -426,6 +466,7 @@ else
     done
     python3 - "$OUT"/c3-energy-*.json <<'PY' | show
 import json, sys
+rows = []
 print("      %-16s %10s %12s %10s" % ("kernel", "MH/s", "kH/J", "watts"))
 for p in sys.argv[1:]:
     try:
@@ -438,9 +479,19 @@ for p in sys.argv[1:]:
               % (d["kernel"]["name"], d["result"]["median"]/1e6,
                  e.get("reason", "unknown")))
         continue
+    rows.append((d["kernel"]["name"], d["result"]["median"]/1e6,
+                 e.get("hashes_per_joule", 0), e.get("cpu_package_watts", 0)))
     print("      %-16s %10.2f %12.0f %10.1f"
-          % (d["kernel"]["name"], d["result"]["median"]/1e6,
-             e.get("hashes_per_joule", 0)/1e3, e.get("cpu_package_watts", 0)))
+          % (rows[-1][0], rows[-1][1], rows[-1][2]/1e3, rows[-1][3]))
+
+# Throughput and efficiency can disagree, and only one of them settles a
+# purchasing question, so print both ratios rather than leaving it to the eye.
+if len(rows) >= 2:
+    a, b = sorted(rows, key=lambda r: -r[1])[:2]
+    print("      %s" % ("-" * 52))
+    print("      %s / %s: %.2fx throughput, %.2fx energy efficiency"
+          % (a[0].split("/")[1], b[0].split("/")[1],
+             a[1] / b[1] if b[1] else 0, a[2] / b[2] if b[2] else 0))
 PY
 fi
 
