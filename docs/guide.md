@@ -554,17 +554,21 @@ pair.
 
 ## Capturing a whole session
 
-`tools/gpu_run.sh` runs the matrix in priority order — crossover first, then
-device stream counts, CPU baseline, memory axis, multi-device — captures the
-environment, gates on `make check`, and leaves one tarball. Built for rented
-hardware where the clock is running, and `tools/cpu_run.sh` is its CPU-only
-sibling. CONTRIBUTING.md covers the setup failures worth pre-empting on a rented
-machine.
+`tools/run.sh` captures the environment, gates on `make check`, runs the matrix,
+and leaves one tarball. Seven CPU phases — the ISA ladder, downclocking, energy,
+the SHA unit, all three algorithms, stream interleaving, and the two workload
+axes — then four device phases if the machine has an OpenCL device: the PCIe
+crossover, device stream counts, the memory axis, and multi-device slicing.
+Phases that need hardware the machine lacks skip themselves and say so.
 
 ```
-$ ./tools/gpu_run.sh            # 20-30 min
-$ ./tools/gpu_run.sh -q         # ~3 min smoke pass
+$ ./tools/run.sh                # everything this machine can do
+$ ./tools/run.sh -q             # quick pass
+$ ./tools/run.sh --only device  # on a metered GPU box, the expensive half first
 ```
+
+CONTRIBUTING.md covers the setup failures worth pre-empting on a rented
+machine.
 
 If the session is cut short, the phases that finished are the ones that
 mattered most.

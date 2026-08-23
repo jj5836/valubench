@@ -133,7 +133,7 @@ def load_path(path):
     """
     Read one result file, or every result file in a directory.
 
-    A directory is read recursively, because that is the shape gpu_run.sh
+    A directory is read recursively, because that is the shape run.sh
     leaves behind: several sweep CSVs and some environment capture in one
     place. Files that are not results are skipped rather than fatal -- a
     results directory legitimately contains build logs and clinfo output.

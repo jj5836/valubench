@@ -422,7 +422,7 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
  * `--list --json`: what this binary can do, on this machine.
  *
  * The human `--list` is for a person deciding what to run. This is for the
- * tooling that drives the binary -- tools/sweep.py, tools/gpu_run.sh, a
+ * tooling that drives the binary -- tools/sweep.py, tools/run.sh, a
  * Phoronix profile -- and it exists because every fact in it was previously
  * transcribed into the caller by hand, where it drifted. sweep.py carried its
  * own table of per-algorithm minimum message lengths; it was wrong for SHA-512

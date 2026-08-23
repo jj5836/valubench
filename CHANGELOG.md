@@ -73,8 +73,8 @@ First public release. What it contains:
 - `tools/compare.py` — diffs two result sets, pairing by workload id, refusing
   to compare across a checksum mismatch, and judging a delta against both the
   significance bar and the noise the runs themselves reported.
-- `tools/gpu_run.sh` and `tools/cpu_run.sh` — one-command captures for a
-  time-boxed session on rented hardware, phased in priority order so an
+- `tools/run.sh` — a one-command capture for a time-boxed session on rented
+  hardware: CPU phases, then device phases if there is a device, ordered so an
   interrupted session still yields what mattered most.
 
 ### Known limits

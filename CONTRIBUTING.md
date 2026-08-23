@@ -85,8 +85,8 @@ testing this way, and CI does it on every push.
 
 ## Measuring on rented hardware
 
-`tools/gpu_run.sh` and `tools/cpu_run.sh` capture a whole session in one
-command. Two failures are worth pre-empting before either is worth running,
+`tools/run.sh` captures a whole session in one command — CPU phases, then
+device phases if the machine has an OpenCL device. Two failures are worth pre-empting before either is worth running,
 both learned the expensive way.
 
 **Stop the machine patching itself.**
@@ -100,7 +100,7 @@ A fresh Ubuntu image runs a background upgrader that can install a kernel and
 reboot the instance out from under a run. Two instances did exactly that within
 minutes of first login. An instance is rented for hours and then destroyed, so
 it gains nothing from unattended patching and can lose a session to it.
-`cpu_run.sh` records whether the service is live, because a machine that reboots
+`run.sh` records whether the service is live, because a machine that reboots
 mid-run looks like a network fault from the other end.
 
 **Do not poll the machine with bare TCP probes, and reuse one SSH connection.**
@@ -122,7 +122,7 @@ socket path of 108 bytes or more fails at connection time, and temp directories
 routinely exceed it.
 
 **Run detached, and copy results off as they land** rather than in one transfer
-at the end. Both scripts write their log to disk before the terminal and tar the
+at the end. The script writes its log to disk before the terminal and tars the
 output directory on exit, including on failure, so a session survives losing the
 connection — but a capture you cannot retrieve is worth nothing.
 
