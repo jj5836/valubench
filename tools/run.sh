@@ -183,15 +183,32 @@ say "environment"
 {
     echo "# date";  date -u
     echo; echo "# uname"; uname -a
-    echo; echo "# instance"
-    # Timeouts are not optional here: off EC2 the link-local metadata address
-    # is often blackholed rather than refused, and an untimed curl hangs the
-    # whole capture before it has measured anything.
+    echo; echo "# machine identity"
+    # DMI first, because it needs no network and no provider API and works on
+    # every host: on EC2 Nitro sys_vendor is "Amazon EC2" and product_name is
+    # the instance type itself, which is what the metadata service would have
+    # told us. On a bare-metal or non-cloud host it names the actual hardware.
+    for f in sys_vendor product_name board_vendor; do
+        [ -r "/sys/class/dmi/id/$f" ] && \
+            printf '  %-14s %s\n' "$f" "$(cat "/sys/class/dmi/id/$f" 2>/dev/null)"
+    done
+    # Then the provider metadata services, for the detail DMI does not carry.
+    # Timeouts are not optional: these are link-local addresses that are
+    # blackholed rather than refused off-provider, and an untimed curl hangs
+    # the whole capture before it has measured anything.
     CURL="curl -s --connect-timeout 1 --max-time 2"
-    TOK=$($CURL -X PUT "http://169.254.169.254/latest/api/token" \
-          -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null)
-    $CURL -H "X-aws-ec2-metadata-token: $TOK" \
-         http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null || echo "(not EC2)"
+    aws_tok=$($CURL -X PUT "http://169.254.169.254/latest/api/token" \
+              -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null)
+    aws=$($CURL -H "X-aws-ec2-metadata-token: $aws_tok" \
+          http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
+    gcp=$($CURL -H "Metadata-Flavor: Google" \
+          http://metadata.google.internal/computeMetadata/v1/instance/machine-type 2>/dev/null)
+    azure=$($CURL -H "Metadata:true" \
+            "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2021-02-01&format=text" 2>/dev/null)
+    for pair in "aws:$aws" "gcp:$gcp" "azure:$azure"; do
+        v=${pair#*:}
+        [ -n "$v" ] && printf '  %-14s %s\n' "${pair%%:*}" "$v"
+    done
     echo; echo; echo "# cpu"; lscpu 2>/dev/null || grep -m1 'model name' /proc/cpuinfo
     echo; echo "# flags of interest"
     # The two families spell their capability lists differently and share no
