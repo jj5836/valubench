@@ -89,3 +89,57 @@ jobs:
                 | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
           echo "neon: $got"
           test "$got" = "955e84cbbc05470019604a2bd9ff2821"
+
+      # One binary, four vector lengths, one answer.
+      #
+      # SVE picks its width from the hardware, so the lane count -- and every
+      # corpus offset derived from it -- is a run-time value. Nothing about
+      # that is exercised by building, and no CI machine has SVE, but qemu
+      # will pretend to any width.
+      #
+      # 384 bits earns its place precisely because no hardware has it: 12
+      # lanes is the case that catches an accidental power-of-two assumption,
+      # and 12 x 3 streams is the case that must decline to run at all,
+      # because 36 does not divide the 768-message batch.
+      - name: SVE and SVE2 at four vector lengths
+        env:
+          QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+        run: |
+          want=955e84cbbc05470019604a2bd9ff2821
+          fail=0
+          for vq in 1 2 3 4; do
+            bits=$((vq * 128))
+            for k in md5/sve-s2 md5/sve2-s2 md5/sve-s4 md5/sve2-s1; do
+              got=$(qemu-aarch64-static -cpu max,sve-max-vq=$vq \
+                      ./build-arm64/valubench --kernel $k --threads 1 \
+                      --samples 2 --time-ms 20 --warmup-ms 20 \
+                    | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+              if [ "$got" = "$want" ]; then
+                echo "  ok   VL=$bits $k"
+              else
+                echo "  FAIL VL=$bits $k: $got"; fail=1
+              fi
+            done
+          done
+          # 36 lanes-times-streams does not tile the batch: the tool must say
+          # so and exit 2, not report a verification failure against silicon
+          # that is behaving perfectly.
+          qemu-aarch64-static -cpu max,sve-max-vq=3 ./build-arm64/valubench \
+            --kernel md5/sve-s3 --samples 1 --time-ms 20 --warmup-ms 20 \
+            >/dev/null 2>&1 && rc=0 || rc=$?
+          echo "  VL=384 md5/sve-s3 exit $rc (want 2)"
+          test "$rc" = 2 || fail=1
+          test "$fail" = 0
+
+      # The SVE kernels must actually contain SVE instructions. The compiler
+      # has surprised this project before by vectorising the scalar kernel;
+      # the reverse mistake -- an SVE translation unit quietly falling back to
+      # Advanced SIMD -- would be just as invisible in the output.
+      - name: the SVE kernels must be SVE
+        run: |
+          for isa in sve sve2; do
+            n=$(aarch64-linux-gnu-objdump -d build-arm64/kernel_$isa.o \
+                | grep -cE '\b(ld1w|st1w|ld1d|st1d|eor3|bsl|xar|sri)\b|\bz[0-9]+\b')
+            echo "  kernel_$isa.o: $n SVE-register instructions"
+            test "$n" -gt 1000
+          done
