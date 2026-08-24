@@ -33,30 +33,58 @@
 #define S5K_SSIG0(x) S5K_XOR(S5K_XOR(S5K_ROTR(x,  1), S5K_ROTR(x,  8)), S5K_SHR(x, 7))
 #define S5K_SSIG1(x) S5K_XOR(S5K_XOR(S5K_ROTR(x, 19), S5K_ROTR(x, 61)), S5K_SHR(x, 6))
 
+/*
+ * SVE hooks, each defaulting to the code already here, so a fixed-width ISA
+ * compiles byte-for-byte what it did before -- verified against the
+ * pre-refactor objects. See the MD5 template for why defaulting rather than
+ * converting: expanding the stream loops unconditionally measured several
+ * percent slower on the scalar kernels, and those are the baseline every
+ * vector ratio is divided by.
+ */
+#ifndef S5K_V
+#  define S5K_V(name, k)      name[k]
+#  define S5K_V2(name, k, i)  name[k][i]
+#  define S5K_SDECL(name)     S5K_VEC name[S5K_STREAMS];
+#  define S5K_SDECL2(name, n) S5K_VEC name[S5K_STREAMS][n];
+#  define S5K_ACCDECL         S5K_VEC acc[8];
+#  define S5K_ACCV(j)         acc[j]
+#  define S5K_FOREACH(BODY) \
+       for (unsigned k = 0; k < S5K_STREAMS; k++) { BODY(k) }
+#  define S5K_FOR8(BODY) for (int j = 0; j < 8; j++) { BODY(j) }
+#  define S5K_FOLDN S5K_LANES
+#endif
+
+#ifndef S5K_WDECL
+#  define S5K_WDECL         S5K_VEC w[S5K_STREAMS][16];
+#  define S5K_WGET(k, i)    w[k][(i)]
+#  define S5K_WSET(k, i, v) w[k][(i)] = (v)
+#endif
+
 #define S5K_STEP1(k, t)                                                   \
     {                                                                     \
-        S5K_VEC t1 = S5K_ADD(H[k], S5K_BSIG1(E[k]));                      \
-        t1 = S5K_ADD(t1, S5K_F_CH(E[k], F[k], G[k]));                     \
+        S5K_VEC t1 = S5K_ADD(S5K_V(H,k), S5K_BSIG1(S5K_V(E,k)));                      \
+        t1 = S5K_ADD(t1, S5K_F_CH(S5K_V(E,k), S5K_V(F,k), S5K_V(G,k)));                     \
         t1 = S5K_ADD(t1, S5K_SET1(SHA512_K[t]));                          \
-        t1 = S5K_ADD(t1, w[k][(t) & 15]);                                 \
-        S5K_VEC t2 = S5K_ADD(S5K_BSIG0(A[k]), S5K_F_MAJ(A[k], B[k], C[k])); \
-        H[k] = G[k];                                                      \
-        G[k] = F[k];                                                      \
-        F[k] = E[k];                                                      \
-        E[k] = S5K_ADD(D[k], t1);                                         \
-        D[k] = C[k];                                                      \
-        C[k] = B[k];                                                      \
-        B[k] = A[k];                                                      \
-        A[k] = S5K_ADD(t1, t2);                                           \
+        t1 = S5K_ADD(t1, S5K_WGET(k, (t) & 15));                                 \
+        S5K_VEC t2 = S5K_ADD(S5K_BSIG0(S5K_V(A,k)),\
+                             S5K_F_MAJ(S5K_V(A,k), S5K_V(B,k), S5K_V(C,k))); \
+        S5K_V(H,k) = S5K_V(G,k);                                                      \
+        S5K_V(G,k) = S5K_V(F,k);                                                      \
+        S5K_V(F,k) = S5K_V(E,k);                                                      \
+        S5K_V(E,k) = S5K_ADD(S5K_V(D,k), t1);                                         \
+        S5K_V(D,k) = S5K_V(C,k);                                                      \
+        S5K_V(C,k) = S5K_V(B,k);                                                      \
+        S5K_V(B,k) = S5K_V(A,k);                                                      \
+        S5K_V(A,k) = S5K_ADD(t1, t2);                                           \
     }
 
 #define S5K_EXPAND1(k, t)                                                 \
     {                                                                     \
-        S5K_VEC x = S5K_ADD(S5K_SSIG1(w[k][((t) - 2) & 15]),              \
-                            w[k][((t) - 7) & 15]);                        \
-        x = S5K_ADD(x, S5K_SSIG0(w[k][((t) - 15) & 15]));                 \
-        x = S5K_ADD(x, w[k][((t) - 16) & 15]);                            \
-        w[k][(t) & 15] = x;                                               \
+        S5K_VEC x = S5K_ADD(S5K_SSIG1(S5K_WGET(k, ((t) - 2) & 15)),              \
+                            S5K_WGET(k, ((t) - 7) & 15));                        \
+        x = S5K_ADD(x, S5K_SSIG0(S5K_WGET(k, ((t) - 15) & 15)));                 \
+        x = S5K_ADD(x, S5K_WGET(k, ((t) - 16) & 15));                            \
+        S5K_WSET(k, (t) & 15, x);                                               \
     }
 
 #if S5K_STREAMS == 1
@@ -113,45 +141,51 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
         return;
     }
 
-    S5K_VEC acc[8];
-    for (int i = 0; i < 8; i++)
-        acc[i] = S5K_SET1(0);
+    S5K_ACCDECL
+#define S5K_ACC_ZERO(j) S5K_ACCV(j) = S5K_SET1(0);
+    S5K_FOR8(S5K_ACC_ZERO)
+#undef S5K_ACC_ZERO
 
     for (uint64_t g = 0; g < n_groups; g++) {
         const uint64_t *slot[S5K_STREAMS];
-        S5K_VEC w[S5K_STREAMS][16];
-        S5K_VEC fb[S5K_STREAMS][8];        /* digest fed back into block 0 */
-        S5K_VEC h[S5K_STREAMS][8];
-        S5K_VEC A[S5K_STREAMS], B[S5K_STREAMS], C[S5K_STREAMS], D[S5K_STREAMS];
-        S5K_VEC E[S5K_STREAMS], F[S5K_STREAMS], G[S5K_STREAMS], H[S5K_STREAMS];
+        S5K_WDECL
+        S5K_SDECL2(fb, 8)                  /* digest fed back into block 0 */
+        S5K_SDECL2(h, 8)
+        S5K_SDECL(A) S5K_SDECL(B) S5K_SDECL(C) S5K_SDECL(D)
+        S5K_SDECL(E) S5K_SDECL(F) S5K_SDECL(G) S5K_SDECL(H)
 
-        for (unsigned k = 0; k < S5K_STREAMS; k++) {
-            slot[k] = corpus + (g * S5K_STREAMS + k) * slot_words;
-            for (int j = 0; j < 8; j++)
-                fb[k][j] = S5K_LOAD(slot[k] + (size_t) j * S5K_LANES);
-        }
+#define S5K_LOAD_FB(j) \
+        S5K_V2(fb,k,j) = S5K_LOAD(slot[k] + (size_t) (j) * S5K_LANES);
+#define S5K_LOAD_SLOT(k)                                         \
+        slot[k] = corpus + (g * S5K_STREAMS + (k)) * slot_words;          \
+        S5K_FOR8(S5K_LOAD_FB)
+        S5K_FOREACH(S5K_LOAD_SLOT)
+#undef S5K_LOAD_SLOT
 
         for (uint32_t it = 0; it < iterations; it++) {
 
-        for (unsigned k = 0; k < S5K_STREAMS; k++)
-            for (int j = 0; j < 8; j++)
-                h[k][j] = S5K_SET1(SHA512_IV[j]);
+#define S5K_INIT_HJ(j) S5K_V2(h,k,j) = S5K_SET1(SHA512_IV[j]);
+#define S5K_INIT_H(k)  S5K_FOR8(S5K_INIT_HJ)
+        S5K_FOREACH(S5K_INIT_H)
+#undef S5K_INIT_H
 
         for (uint32_t b = 0; b < blocks; b++) {
 
-        for (unsigned k = 0; k < S5K_STREAMS; k++) {
-            const uint64_t *wp = slot[k] + (size_t) b * block_words;
-
-            for (int j = 0; j < 16; j++)
-                w[k][j] = S5K_LOAD(wp + (size_t) j * S5K_LANES);
-
-            if (b == 0)
-                for (int j = 0; j < 8; j++)
-                    w[k][j] = fb[k][j];
-
-            A[k] = h[k][0]; B[k] = h[k][1]; C[k] = h[k][2]; D[k] = h[k][3];
-            E[k] = h[k][4]; F[k] = h[k][5]; G[k] = h[k][6]; H[k] = h[k][7];
-        }
+#define S5K_FEED_FB(j) S5K_WSET(k, j, S5K_V2(fb,k,j));
+#define S5K_START_BLOCK(k)                                       \
+        {                                                                 \
+            const uint64_t *wp = slot[k] + (size_t) b * block_words;      \
+            for (int j = 0; j < 16; j++)                                  \
+                S5K_WSET(k, j, S5K_LOAD(wp + (size_t) j * S5K_LANES));    \
+            if (b == 0)                                                   \
+                S5K_FOR8(S5K_FEED_FB)                                     \
+        }                                                                 \
+        S5K_V(A,k) = S5K_V2(h,k,0); S5K_V(B,k) = S5K_V2(h,k,1);           \
+        S5K_V(C,k) = S5K_V2(h,k,2); S5K_V(D,k) = S5K_V2(h,k,3);           \
+        S5K_V(E,k) = S5K_V2(h,k,4); S5K_V(F,k) = S5K_V2(h,k,5);           \
+        S5K_V(G,k) = S5K_V2(h,k,6); S5K_V(H,k) = S5K_V2(h,k,7);
+        S5K_FOREACH(S5K_START_BLOCK)
+#undef S5K_START_BLOCK
 
 
     S5K_RUN16(S5K_PLAIN,     0);
@@ -160,40 +194,58 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
     S5K_RUN16(S5K_EXPANDED, 48);
     S5K_RUN16(S5K_EXPANDED, 64);
 
-        for (unsigned k = 0; k < S5K_STREAMS; k++) {
-            h[k][0] = S5K_ADD(h[k][0], A[k]);
-            h[k][1] = S5K_ADD(h[k][1], B[k]);
-            h[k][2] = S5K_ADD(h[k][2], C[k]);
-            h[k][3] = S5K_ADD(h[k][3], D[k]);
-            h[k][4] = S5K_ADD(h[k][4], E[k]);
-            h[k][5] = S5K_ADD(h[k][5], F[k]);
-            h[k][6] = S5K_ADD(h[k][6], G[k]);
-            h[k][7] = S5K_ADD(h[k][7], H[k]);
-        }
+#define S5K_CHAIN(k)                                             \
+        S5K_V2(h,k,0) = S5K_ADD(S5K_V2(h,k,0), S5K_V(A,k));               \
+        S5K_V2(h,k,1) = S5K_ADD(S5K_V2(h,k,1), S5K_V(B,k));               \
+        S5K_V2(h,k,2) = S5K_ADD(S5K_V2(h,k,2), S5K_V(C,k));               \
+        S5K_V2(h,k,3) = S5K_ADD(S5K_V2(h,k,3), S5K_V(D,k));               \
+        S5K_V2(h,k,4) = S5K_ADD(S5K_V2(h,k,4), S5K_V(E,k));               \
+        S5K_V2(h,k,5) = S5K_ADD(S5K_V2(h,k,5), S5K_V(F,k));               \
+        S5K_V2(h,k,6) = S5K_ADD(S5K_V2(h,k,6), S5K_V(G,k));               \
+        S5K_V2(h,k,7) = S5K_ADD(S5K_V2(h,k,7), S5K_V(H,k));
+        S5K_FOREACH(S5K_CHAIN)
+#undef S5K_CHAIN
 
         }   /* blocks */
 
-        for (unsigned k = 0; k < S5K_STREAMS; k++)
-            for (int j = 0; j < 8; j++)
-                fb[k][j] = h[k][j];
+#define S5K_FB_J(j) S5K_V2(fb,k,j) = S5K_V2(h,k,j);
+#define S5K_FEEDBACK(k)  S5K_FOR8(S5K_FB_J)
+        S5K_FOREACH(S5K_FEEDBACK)
+#undef S5K_FEEDBACK
 
         }   /* iterations */
 
-        for (unsigned k = 0; k < S5K_STREAMS; k++)
-            for (int j = 0; j < 8; j++)
-                acc[j] = S5K_XOR(acc[j], h[k][j]);
+#define S5K_ACC_J(j) S5K_ACCV(j) = S5K_XOR(S5K_ACCV(j), S5K_V2(h,k,j));
+#define S5K_ACCUM(k)  S5K_FOR8(S5K_ACC_J)
+        S5K_FOREACH(S5K_ACCUM)
+#undef S5K_ACCUM
     }
 
-    uint64_t tmp[S5K_LANES];
-    for (int j = 0; j < 8; j++) {
-        uint64_t c = 0;
-        S5K_STORE(tmp, acc[j]);
-        for (unsigned l = 0; l < S5K_LANES; l++)
-            c ^= tmp[l];
-        checksum[j] = c;
+    uint64_t tmp[S5K_FOLDN];
+#define S5K_FOLD(j)                                                       \
+    {                                                                     \
+        uint64_t c = 0;                                                   \
+        S5K_STORE(tmp, S5K_ACCV(j));                                      \
+        for (unsigned l = 0; l < (unsigned) (S5K_LANES); l++)             \
+            c ^= tmp[l];                                                  \
+        checksum[j] = c;                                                  \
     }
+    S5K_FOR8(S5K_FOLD)
+#undef S5K_FOLD
 }
 
+#undef S5K_V
+#undef S5K_V2
+#undef S5K_SDECL
+#undef S5K_SDECL2
+#undef S5K_ACCDECL
+#undef S5K_ACCV
+#undef S5K_FOREACH
+#undef S5K_FOR8
+#undef S5K_FOLDN
+#undef S5K_WDECL
+#undef S5K_WGET
+#undef S5K_WSET
 #undef S5K_BSIG0
 #undef S5K_BSIG1
 #undef S5K_SSIG0

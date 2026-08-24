@@ -85,6 +85,37 @@ static const uint32_t MD5_T[64] = {
 #endif
 
 /*
+ * SVE hooks.
+ *
+ * Every one of these defaults to the code this template already had, so a
+ * fixed-width ISA compiles byte-for-byte what it compiled before. They exist
+ * because SVE vectors are sizeless: they cannot go in an array, so per-stream
+ * state has to be held in separately named variables and every loop over the
+ * stream index has to be expanded to reach them with a literal.
+ *
+ * Defaulting rather than converting is deliberate and was measured. Expanding
+ * the stream loops unconditionally costs md5/scalar-s2 3.6% and sha1/scalar-s2
+ * 5.5% -- the register allocator simply lands differently on the fully
+ * expanded form -- and the scalar kernels are the baseline every vector ratio
+ * is divided by, so a few percent there moves every published number.
+ *
+ *   MD5K_V/MD5K_V2   read one stream's state
+ *   MD5K_SDECL       declare it
+ *   MD5K_FOREACH     visit every stream
+ *   MD5K_W           the message-word accessor, register or memory
+ *   MD5K_FOLDN       size of the lane-fold scratch
+ */
+#ifndef MD5K_V
+#  define MD5K_V(name, k)      name[k]
+#  define MD5K_V2(name, k, i)  name[k][i]
+#  define MD5K_SDECL(name)     MD5K_VEC name[MD5K_STREAMS];
+#  define MD5K_SDECL2(name, n) MD5K_VEC name[MD5K_STREAMS][n];
+#  define MD5K_FOREACH(BODY) \
+       for (unsigned k = 0; k < MD5K_STREAMS; k++) { BODY(k) }
+#  define MD5K_FOLDN MD5K_LANES
+#endif
+
+/*
  * Message word accessor.
  *
  * Words 0..3 live in registers because iterated hashing rewrites them with the
@@ -93,15 +124,18 @@ static const uint32_t MD5_T[64] = {
  * Words 4..15 are loaded straight from the corpus. WI is always a literal, so
  * the branch folds away at compile time.
  */
-#define MD5K_W(k, WI) (((WI) < 4) ? wv[k][(WI)] \
-                                  : MD5K_LOAD(wp[k] + (WI) * MD5K_LANES))
+#ifndef MD5K_W
+#  define MD5K_W(k, WI) (((WI) < 4) ? MD5K_V2(wv, k, WI) \
+                                    : MD5K_LOAD(wp[k] + (WI) * MD5K_LANES))
+#endif
 
 #define MD5K_STEP1(k, F, A, B, C, D, WI, TI, SH)              \
-    A[k] = MD5K_ADD(A[k], F(B[k], C[k], D[k]));               \
-    A[k] = MD5K_ADD(A[k], MD5K_W(k, WI));                     \
-    A[k] = MD5K_ADD(A[k], MD5K_SET1(MD5_T[TI]));              \
-    A[k] = MD5K_ROTL(A[k], SH);                               \
-    A[k] = MD5K_ADD(A[k], B[k]);
+    MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k),                                      \
+                           F(MD5K_V(B,k), MD5K_V(C,k), MD5K_V(D,k)));        \
+    MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_W(k, WI));                      \
+    MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_SET1(MD5_T[TI]));               \
+    MD5K_V(A,k) = MD5K_ROTL(MD5K_V(A,k), SH);                                \
+    MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_V(B,k));
 
 /*
  * Streams are expanded explicitly rather than with a loop. A loop over a small
@@ -166,11 +200,9 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
         const uint32_t *slot[MD5K_STREAMS];
         const uint32_t *wp[MD5K_STREAMS];
 
-        MD5K_VEC wv[MD5K_STREAMS][4];
-        MD5K_VEC h0[MD5K_STREAMS], h1[MD5K_STREAMS];
-        MD5K_VEC h2[MD5K_STREAMS], h3[MD5K_STREAMS];
-        MD5K_VEC A[MD5K_STREAMS], B[MD5K_STREAMS];
-        MD5K_VEC C[MD5K_STREAMS], D[MD5K_STREAMS];
+        MD5K_SDECL2(wv, 4)
+        MD5K_SDECL(h0) MD5K_SDECL(h1) MD5K_SDECL(h2) MD5K_SDECL(h3)
+        MD5K_SDECL(A)  MD5K_SDECL(B)  MD5K_SDECL(C)  MD5K_SDECL(D)
 
         /*
          * Load block 0's words 0..3 once, before any iteration. From here on
@@ -178,45 +210,44 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
          * iteration, so they are unconditionally live on every path into the
          * step sequence.
          */
-        for (unsigned k = 0; k < MD5K_STREAMS; k++) {
-            slot[k] = corpus + (g * MD5K_STREAMS + k) * slot_words;
-            wv[k][0] = MD5K_LOAD(slot[k] + 0 * MD5K_LANES);
-            wv[k][1] = MD5K_LOAD(slot[k] + 1 * MD5K_LANES);
-            wv[k][2] = MD5K_LOAD(slot[k] + 2 * MD5K_LANES);
-            wv[k][3] = MD5K_LOAD(slot[k] + 3 * MD5K_LANES);
-        }
+#define MD5K_LOAD_SLOT(k)                                           \
+        slot[k] = corpus + (g * MD5K_STREAMS + (k)) * slot_words;         \
+        MD5K_V2(wv,k,0) = MD5K_LOAD(slot[k] + 0 * MD5K_LANES);            \
+        MD5K_V2(wv,k,1) = MD5K_LOAD(slot[k] + 1 * MD5K_LANES);            \
+        MD5K_V2(wv,k,2) = MD5K_LOAD(slot[k] + 2 * MD5K_LANES);            \
+        MD5K_V2(wv,k,3) = MD5K_LOAD(slot[k] + 3 * MD5K_LANES);
+        MD5K_FOREACH(MD5K_LOAD_SLOT)
+#undef MD5K_LOAD_SLOT
 
         for (uint32_t it = 0; it < iterations; it++) {
 
-        for (unsigned k = 0; k < MD5K_STREAMS; k++) {
-            h0[k] = MD5K_SET1(0x67452301u);
-            h1[k] = MD5K_SET1(0xefcdab89u);
-            h2[k] = MD5K_SET1(0x98badcfeu);
-            h3[k] = MD5K_SET1(0x10325476u);
-        }
+#define MD5K_INIT_H(k)                                              \
+        MD5K_V(h0,k) = MD5K_SET1(0x67452301u);                            \
+        MD5K_V(h1,k) = MD5K_SET1(0xefcdab89u);                            \
+        MD5K_V(h2,k) = MD5K_SET1(0x98badcfeu);                            \
+        MD5K_V(h3,k) = MD5K_SET1(0x10325476u);
+        MD5K_FOREACH(MD5K_INIT_H)
+#undef MD5K_INIT_H
 
         for (uint32_t b = 0; b < blocks; b++) {
 
-        for (unsigned k = 0; k < MD5K_STREAMS; k++) {
-            wp[k] = slot[k] + (size_t) b * block_words;
-
-            /*
-             * Blocks after the first always take words 0..3 from the corpus.
-             * Block 0 keeps whatever wv already holds: the corpus values on the
-             * first iteration, the previous digest on later ones.
-             */
-            if (b > 0) {
-                wv[k][0] = MD5K_LOAD(wp[k] + 0 * MD5K_LANES);
-                wv[k][1] = MD5K_LOAD(wp[k] + 1 * MD5K_LANES);
-                wv[k][2] = MD5K_LOAD(wp[k] + 2 * MD5K_LANES);
-                wv[k][3] = MD5K_LOAD(wp[k] + 3 * MD5K_LANES);
-            }
-
-            A[k] = h0[k];
-            B[k] = h1[k];
-            C[k] = h2[k];
-            D[k] = h3[k];
-        }
+#define MD5K_START_BLOCK(k)                                         \
+        wp[k] = slot[k] + (size_t) b * block_words;                       \
+        /* Blocks after the first always take words 0..3 from the corpus.  \
+           Block 0 keeps whatever wv already holds: the corpus values on   \
+           the first iteration, the previous digest on later ones. */      \
+        if (b > 0) {                                                      \
+            MD5K_V2(wv,k,0) = MD5K_LOAD(wp[k] + 0 * MD5K_LANES);          \
+            MD5K_V2(wv,k,1) = MD5K_LOAD(wp[k] + 1 * MD5K_LANES);          \
+            MD5K_V2(wv,k,2) = MD5K_LOAD(wp[k] + 2 * MD5K_LANES);          \
+            MD5K_V2(wv,k,3) = MD5K_LOAD(wp[k] + 3 * MD5K_LANES);          \
+        }                                                                 \
+        MD5K_V(A,k) = MD5K_V(h0,k);                                       \
+        MD5K_V(B,k) = MD5K_V(h1,k);                                       \
+        MD5K_V(C,k) = MD5K_V(h2,k);                                       \
+        MD5K_V(D,k) = MD5K_V(h3,k);
+        MD5K_FOREACH(MD5K_START_BLOCK)
+#undef MD5K_START_BLOCK
 
     /* ---- round 1 ---- */
     MD5K_STEP(MD5K_F, A, B, C, D,  0,  0,  7);
@@ -291,46 +322,50 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
     MD5K_STEP(MD5K_I, B, C, D, A,  9, 63, 21);
 
         /* Chain this block into the running state, per RFC 1321 section 3.4. */
-        for (unsigned k = 0; k < MD5K_STREAMS; k++) {
-            h0[k] = MD5K_ADD(h0[k], A[k]);
-            h1[k] = MD5K_ADD(h1[k], B[k]);
-            h2[k] = MD5K_ADD(h2[k], C[k]);
-            h3[k] = MD5K_ADD(h3[k], D[k]);
-        }
+#define MD5K_CHAIN(k)                                               \
+        MD5K_V(h0,k) = MD5K_ADD(MD5K_V(h0,k), MD5K_V(A,k));               \
+        MD5K_V(h1,k) = MD5K_ADD(MD5K_V(h1,k), MD5K_V(B,k));               \
+        MD5K_V(h2,k) = MD5K_ADD(MD5K_V(h2,k), MD5K_V(C,k));               \
+        MD5K_V(h3,k) = MD5K_ADD(MD5K_V(h3,k), MD5K_V(D,k));
+        MD5K_FOREACH(MD5K_CHAIN)
+#undef MD5K_CHAIN
 
         }   /* blocks */
 
         /* Feed the finished digest back as the leading 16 message bytes, so
            the next iteration is the same work on different data. */
-        for (unsigned k = 0; k < MD5K_STREAMS; k++) {
-            wv[k][0] = h0[k];
-            wv[k][1] = h1[k];
-            wv[k][2] = h2[k];
-            wv[k][3] = h3[k];
-        }
+#define MD5K_FEEDBACK(k)                                            \
+        MD5K_V2(wv,k,0) = MD5K_V(h0,k);                                   \
+        MD5K_V2(wv,k,1) = MD5K_V(h1,k);                                   \
+        MD5K_V2(wv,k,2) = MD5K_V(h2,k);                                   \
+        MD5K_V2(wv,k,3) = MD5K_V(h3,k);
+        MD5K_FOREACH(MD5K_FEEDBACK)
+#undef MD5K_FEEDBACK
 
         }   /* iterations */
 
         /* Only the final digest of each message contributes. */
-        for (unsigned k = 0; k < MD5K_STREAMS; k++) {
-            acc0 = MD5K_XOR(acc0, h0[k]);
-            acc1 = MD5K_XOR(acc1, h1[k]);
-            acc2 = MD5K_XOR(acc2, h2[k]);
-            acc3 = MD5K_XOR(acc3, h3[k]);
-        }
+#define MD5K_ACC(k)                                                 \
+        acc0 = MD5K_XOR(acc0, MD5K_V(h0,k));                              \
+        acc1 = MD5K_XOR(acc1, MD5K_V(h1,k));                              \
+        acc2 = MD5K_XOR(acc2, MD5K_V(h2,k));                              \
+        acc3 = MD5K_XOR(acc3, MD5K_V(h3,k));
+        MD5K_FOREACH(MD5K_ACC)
+#undef MD5K_ACC
     }
 
     /* Fold the lanes. XOR is commutative and associative, so the result does
        not depend on lane or stream assignment -- that is what lets one expected
        value validate every kernel. */
-    uint32_t t0[MD5K_LANES], t1[MD5K_LANES], t2[MD5K_LANES], t3[MD5K_LANES];
+    uint32_t t0[MD5K_FOLDN], t1[MD5K_FOLDN];
+    uint32_t t2[MD5K_FOLDN], t3[MD5K_FOLDN];
     MD5K_STORE(t0, acc0);
     MD5K_STORE(t1, acc1);
     MD5K_STORE(t2, acc2);
     MD5K_STORE(t3, acc3);
 
     uint32_t c0 = 0, c1 = 0, c2 = 0, c3 = 0;
-    for (unsigned l = 0; l < MD5K_LANES; l++) {
+    for (unsigned l = 0; l < (unsigned) (MD5K_LANES); l++) {
         c0 ^= t0[l];
         c1 ^= t1[l];
         c2 ^= t2[l];
@@ -345,6 +380,12 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
     checksum[3] = c3;
 }
 
+#undef MD5K_V
+#undef MD5K_V2
+#undef MD5K_SDECL
+#undef MD5K_SDECL2
+#undef MD5K_FOREACH
+#undef MD5K_FOLDN
 #undef MD5K_W
 #undef MD5K_STEP1
 #undef MD5K_STEP

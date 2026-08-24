@@ -117,6 +117,15 @@
  * default 55 bytes that is 48 KiB, which is fine; with megabyte messages the
  * floor is correspondingly large.
  */
+/*
+ * Upper bound on SIMD lanes in any kernel, for the fixed-size buffers the lane
+ * fold needs. A vector-length-agnostic kernel does not know its lane count
+ * until it runs, so the fold cannot size its scratch by MD5K_LANES any more.
+ * 64 is SVE's architectural maximum (2048-bit vectors of 32-bit words) and
+ * also the device interleave, so nothing can exceed it.
+ */
+#define VB_MAX_LANES 64u
+
 #define VB_BATCH_LCM 768u
 
 /* Build message `index` of `bytes` bytes. Buffer must hold `bytes`. */
