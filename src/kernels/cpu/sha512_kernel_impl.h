@@ -189,8 +189,13 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
             const uint64_t *wp = slot[k] + (size_t) b * block_words;      \
             for (int j = 0; j < 16; j++)                                  \
                 S5K_WSET(k, j, S5K_LOAD(wp + (size_t) j * S5K_LANES));    \
-            if (b == 0)                                                   \
-                S5K_FOR8K(S5K_FEED_FB, k)                                     \
+            /* Braces are load-bearing: S5K_FOR8K is one statement when it
+               is a loop and several when an ISA expands it, and an unbraced
+               if would guard only the first. Multi-block messages on every
+               SVE kernel; single-block ones never showed it. */          \
+            if (b == 0) {                                                 \
+                S5K_FOR8K(S5K_FEED_FB, k)                                           \
+            }                                                             \
         }                                                                 \
         S5K_V(A,k) = S5K_V2(h,k,0); S5K_V(B,k) = S5K_V2(h,k,1);           \
         S5K_V(C,k) = S5K_V2(h,k,2); S5K_V(D,k) = S5K_V2(h,k,3);           \

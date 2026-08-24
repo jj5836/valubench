@@ -241,8 +241,13 @@ void S1K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
                 S1K_WSET(k, j, S1K_LOAD(wp + (size_t) j * S1K_LANES));    \
             /* Block 0 carries the previous digest over the head of the   \
                message; every other block is corpus data unchanged. */    \
-            if (b == 0)                                                   \
-                S1K_FOR5(S1K_FEED_FB, k)                                     \
+            /* Braces are load-bearing: S1K_FOR5 is one statement when it
+               is a loop and several when an ISA expands it, and an unbraced
+               if would guard only the first. Multi-block messages on every
+               SVE kernel; single-block ones never showed it. */          \
+            if (b == 0) {                                                 \
+                S1K_FOR5(S1K_FEED_FB, k)                                           \
+            }                                                             \
         }                                                                 \
         S1K_V(A,k) = S1K_V(h0,k); S1K_V(B,k) = S1K_V(h1,k);               \
         S1K_V(C,k) = S1K_V(h2,k); S1K_V(D,k) = S1K_V(h3,k);               \

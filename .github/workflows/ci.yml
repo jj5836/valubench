@@ -75,6 +75,9 @@ jobs:
       - name: build
         run: make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 -j$(nproc)
 
+      # This is the step that matters most: test_kernels sweeps message sizes,
+      # block counts and iteration counts across every registered kernel, so it
+      # reaches the multi-block paths a fixed-size smoke run never does.
       - name: known-answer vectors and every kernel, under emulation
         env:
           QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
@@ -119,6 +122,27 @@ jobs:
               else
                 echo "  FAIL VL=$bits $k: $got"; fail=1
               fi
+            done
+          done
+          # Multi-block messages, which the default 55-byte size never reaches.
+          # A brace bug in the SVE hooks corrupted every block after the first
+          # and was invisible at 55 bytes: the loop the hooks expand is one
+          # statement by default and several when expanded, so an unbraced
+          # `if (b == 0)` guarded only the first of them. Real hardware found
+          # it; this would have found it first, and cheaper.
+          for mb in 56 119 120 200; do
+            for k in sha1/sve-s1 sha1/sve2-s2 sha512/sve-s1 md5/sve-s4; do
+              got=$(qemu-aarch64-static -cpu max,sve-max-vq=2 \
+                      ./build-arm64/valubench --kernel $k --message-bytes $mb \
+                      --threads 1 --samples 2 --time-ms 20 --warmup-ms 20 \
+                    | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+              ref=$(qemu-aarch64-static -cpu max,sve-max-vq=2 \
+                      ./build-arm64/valubench --kernel ${k%%/*}/scalar-s1 \
+                      --message-bytes $mb --threads 1 --samples 2 \
+                      --time-ms 20 --warmup-ms 20 \
+                    | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+              if [ "$got" = "$ref" ]; then echo "  ok   $mb B $k"
+              else echo "  FAIL $mb B $k: $got vs $ref"; fail=1; fi
             done
           done
           # 36 lanes-times-streams does not tile the batch: the tool must say
