@@ -47,10 +47,18 @@ against both the 10% significance bar and the noise the two runs reported.
 plan of record. When something lands, update it before considering the work
 done — it drifted badly once, describing shipped mechanisms as unbuilt.
 
-Strike items through rather than deleting them, with a sentence on what actually
-landed. Say what remains, specifically: "done except for X" is only useful if X
-is named. New work discovered while implementing goes in as a new item with the
+**Delete finished items rather than striking them through.** The roadmap is a
+list of work to do, not a record of work done — git history and research.md
+already hold the record. An item that ships in part loses the shipped part and
+keeps the rest, stated specifically: "done except for X" is only useful if X is
+named. New work discovered while implementing goes in as a new item with the
 reason it was not obvious in advance.
+
+**An item that is a question names what would answer it.** State the hypothesis,
+and the measurement that would confirm or refute it, concretely enough to run —
+which machine, which sweep, and what each outcome would mean. Candidates already
+eliminated are listed with the evidence that killed them, so the next session
+does not re-derive them.
 
 **Verify before writing "remaining".** Claims about what does not exist age
 worst. One item said a flag "pins exactly one" kernel, which had been false

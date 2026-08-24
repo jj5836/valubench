@@ -53,7 +53,8 @@ recent Intel client CPU `--algorithm sha512` is now in the position SHA-1 was in
 before its SHA-NI path existed: there is a fixed-function unit the benchmark
 does not use, and the number it reports is no longer that machine's best. An
 algorithm that satisfies this finding when it is added can stop satisfying it
-later, without anything in the project changing. TODO item 7 carries the work.
+later, without anything in the project changing. The roadmap carries the work
+under "New instruction sets".
 
 Measured on the N100, the fixed-function path runs at **more than twice the best
 integer-SIMD path** — and the SIMD path there is

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Count stack traffic per stream in the scalar kernels.
 
-The question (roadmap 8a): what sets the best stream count on a given core?
+The question: what sets the best stream count on a given core?
 Live state per stream orders the algorithms identically on x86-64 and AArch64 --
 MD5 four, SHA-1 one to two, SHA-512 one -- but does not predict the peak across
 machines. AArch64 has 31 general-purpose registers to x86-64's 16, yet
