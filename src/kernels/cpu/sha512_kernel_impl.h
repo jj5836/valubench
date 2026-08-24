@@ -44,13 +44,19 @@
 #ifndef S5K_V
 #  define S5K_V(name, k)      name[k]
 #  define S5K_V2(name, k, i)  name[k][i]
-#  define S5K_SDECL(name)     S5K_VEC name[S5K_STREAMS];
-#  define S5K_SDECL2(name, n) S5K_VEC name[S5K_STREAMS][n];
+#  define S5K_SDECL_ALL                                                    \
+        S5K_VEC fb[S5K_STREAMS][8];      /* digest fed into block 0 */      \
+        S5K_VEC h[S5K_STREAMS][8];                                          \
+        S5K_VEC A[S5K_STREAMS], B[S5K_STREAMS], C[S5K_STREAMS],             \
+                D[S5K_STREAMS];                                             \
+        S5K_VEC E[S5K_STREAMS], F[S5K_STREAMS], G[S5K_STREAMS],             \
+                H[S5K_STREAMS];
 #  define S5K_ACCDECL         S5K_VEC acc[8];
 #  define S5K_ACCV(j)         acc[j]
 #  define S5K_FOREACH(BODY) \
        for (unsigned k = 0; k < S5K_STREAMS; k++) { BODY(k) }
-#  define S5K_FOR8(BODY) for (int j = 0; j < 8; j++) { BODY(j) }
+#  define S5K_FOR8(BODY)     for (int j = 0; j < 8; j++) { BODY(j) }
+#  define S5K_FOR8K(BODY, k) for (int j = 0; j < 8; j++) { BODY(k, j) }
 #  define S5K_FOLDN S5K_LANES
 #endif
 
@@ -149,36 +155,33 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
     for (uint64_t g = 0; g < n_groups; g++) {
         const uint64_t *slot[S5K_STREAMS];
         S5K_WDECL
-        S5K_SDECL2(fb, 8)                  /* digest fed back into block 0 */
-        S5K_SDECL2(h, 8)
-        S5K_SDECL(A) S5K_SDECL(B) S5K_SDECL(C) S5K_SDECL(D)
-        S5K_SDECL(E) S5K_SDECL(F) S5K_SDECL(G) S5K_SDECL(H)
+        S5K_SDECL_ALL
 
-#define S5K_LOAD_FB(j) \
+#define S5K_LOAD_FB(k, j) \
         S5K_V2(fb,k,j) = S5K_LOAD(slot[k] + (size_t) (j) * S5K_LANES);
 #define S5K_LOAD_SLOT(k)                                         \
         slot[k] = corpus + (g * S5K_STREAMS + (k)) * slot_words;          \
-        S5K_FOR8(S5K_LOAD_FB)
+        S5K_FOR8K(S5K_LOAD_FB, k)
         S5K_FOREACH(S5K_LOAD_SLOT)
 #undef S5K_LOAD_SLOT
 
         for (uint32_t it = 0; it < iterations; it++) {
 
-#define S5K_INIT_HJ(j) S5K_V2(h,k,j) = S5K_SET1(SHA512_IV[j]);
-#define S5K_INIT_H(k)  S5K_FOR8(S5K_INIT_HJ)
+#define S5K_INIT_HJ(k, j) S5K_V2(h,k,j) = S5K_SET1(SHA512_IV[j]);
+#define S5K_INIT_H(k)  S5K_FOR8K(S5K_INIT_HJ, k)
         S5K_FOREACH(S5K_INIT_H)
 #undef S5K_INIT_H
 
         for (uint32_t b = 0; b < blocks; b++) {
 
-#define S5K_FEED_FB(j) S5K_WSET(k, j, S5K_V2(fb,k,j));
+#define S5K_FEED_FB(k, j) S5K_WSET(k, j, S5K_V2(fb,k,j));
 #define S5K_START_BLOCK(k)                                       \
         {                                                                 \
             const uint64_t *wp = slot[k] + (size_t) b * block_words;      \
             for (int j = 0; j < 16; j++)                                  \
                 S5K_WSET(k, j, S5K_LOAD(wp + (size_t) j * S5K_LANES));    \
             if (b == 0)                                                   \
-                S5K_FOR8(S5K_FEED_FB)                                     \
+                S5K_FOR8K(S5K_FEED_FB, k)                                     \
         }                                                                 \
         S5K_V(A,k) = S5K_V2(h,k,0); S5K_V(B,k) = S5K_V2(h,k,1);           \
         S5K_V(C,k) = S5K_V2(h,k,2); S5K_V(D,k) = S5K_V2(h,k,3);           \
@@ -208,15 +211,15 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 
         }   /* blocks */
 
-#define S5K_FB_J(j) S5K_V2(fb,k,j) = S5K_V2(h,k,j);
-#define S5K_FEEDBACK(k)  S5K_FOR8(S5K_FB_J)
+#define S5K_FB_J(k, j) S5K_V2(fb,k,j) = S5K_V2(h,k,j);
+#define S5K_FEEDBACK(k)  S5K_FOR8K(S5K_FB_J, k)
         S5K_FOREACH(S5K_FEEDBACK)
 #undef S5K_FEEDBACK
 
         }   /* iterations */
 
-#define S5K_ACC_J(j) S5K_ACCV(j) = S5K_XOR(S5K_ACCV(j), S5K_V2(h,k,j));
-#define S5K_ACCUM(k)  S5K_FOR8(S5K_ACC_J)
+#define S5K_ACC_J(k, j) S5K_ACCV(j) = S5K_XOR(S5K_ACCV(j), S5K_V2(h,k,j));
+#define S5K_ACCUM(k)  S5K_FOR8K(S5K_ACC_J, k)
         S5K_FOREACH(S5K_ACCUM)
 #undef S5K_ACCUM
     }
@@ -236,12 +239,12 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 
 #undef S5K_V
 #undef S5K_V2
-#undef S5K_SDECL
-#undef S5K_SDECL2
+#undef S5K_SDECL_ALL
 #undef S5K_ACCDECL
 #undef S5K_ACCV
 #undef S5K_FOREACH
 #undef S5K_FOR8
+#undef S5K_FOR8K
 #undef S5K_FOLDN
 #undef S5K_WDECL
 #undef S5K_WGET

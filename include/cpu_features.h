@@ -26,6 +26,26 @@ int vb_cpu_has_avx512f(void);
 int vb_cpu_has_neon(void);
 
 /*
+ * SVE and SVE2. Both are AArch64-only and report 0 everywhere else.
+ *
+ * These are separate ISAs here, not one with a feature flag, because they are
+ * separate instruction sets for this workload: SVE has no three-input bitwise
+ * select, no three-way XOR, no fused xor-rotate and no shift-right-insert,
+ * and SVE2 has all four. Comparing them is the point.
+ */
+int vb_cpu_has_sve(void);
+int vb_cpu_has_sve2(void);
+
+/*
+ * Lanes per vector at the run-time vector length: svcntw() for 32-bit words,
+ * svcntd() for 64-bit. The registry calls these once. They live here rather
+ * than in the kernel translation units because registry.c is built without
+ * -march=armv8-a+sve and must not see arm_sve.h.
+ */
+unsigned vb_sve_lanes32(void);
+unsigned vb_sve_lanes64(void);
+
+/*
  * The x86 SHA extensions. Not a wider vector ALU but a fixed-function SHA-1 and
  * SHA-256 unit, so it is available to the SHA-1 kernels only -- see
  * src/kernels/cpu/shani.c.

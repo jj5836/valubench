@@ -108,8 +108,12 @@ static const uint32_t MD5_T[64] = {
 #ifndef MD5K_V
 #  define MD5K_V(name, k)      name[k]
 #  define MD5K_V2(name, k, i)  name[k][i]
-#  define MD5K_SDECL(name)     MD5K_VEC name[MD5K_STREAMS];
-#  define MD5K_SDECL2(name, n) MD5K_VEC name[MD5K_STREAMS][n];
+#  define MD5K_SDECL_ALL                                   \
+        MD5K_VEC wv[MD5K_STREAMS][4];                       \
+        MD5K_VEC h0[MD5K_STREAMS], h1[MD5K_STREAMS];        \
+        MD5K_VEC h2[MD5K_STREAMS], h3[MD5K_STREAMS];        \
+        MD5K_VEC A[MD5K_STREAMS], B[MD5K_STREAMS];          \
+        MD5K_VEC C[MD5K_STREAMS], D[MD5K_STREAMS];
 #  define MD5K_FOREACH(BODY) \
        for (unsigned k = 0; k < MD5K_STREAMS; k++) { BODY(k) }
 #  define MD5K_FOLDN MD5K_LANES
@@ -200,9 +204,7 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
         const uint32_t *slot[MD5K_STREAMS];
         const uint32_t *wp[MD5K_STREAMS];
 
-        MD5K_SDECL2(wv, 4)
-        MD5K_SDECL(h0) MD5K_SDECL(h1) MD5K_SDECL(h2) MD5K_SDECL(h3)
-        MD5K_SDECL(A)  MD5K_SDECL(B)  MD5K_SDECL(C)  MD5K_SDECL(D)
+        MD5K_SDECL_ALL
 
         /*
          * Load block 0's words 0..3 once, before any iteration. From here on
@@ -382,8 +384,7 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 
 #undef MD5K_V
 #undef MD5K_V2
-#undef MD5K_SDECL
-#undef MD5K_SDECL2
+#undef MD5K_SDECL_ALL
 #undef MD5K_FOREACH
 #undef MD5K_FOLDN
 #undef MD5K_W

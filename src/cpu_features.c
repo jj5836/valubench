@@ -127,6 +127,10 @@ const char *vb_cpu_brand(void)
 }
 
 int vb_cpu_has_neon(void)     { return 0; }
+int vb_cpu_has_sve(void)      { return 0; }
+int vb_cpu_has_sve2(void)     { return 0; }
+unsigned vb_sve_lanes32(void) { return 0; }
+unsigned vb_sve_lanes64(void) { return 0; }
 
 #elif defined(__aarch64__)
 
@@ -158,6 +162,34 @@ int vb_cpu_has_neon(void)
     return (getauxval(AT_HWCAP) & HWCAP_ASIMD) != 0;
 #else
     return 1;
+#endif
+}
+
+/*
+ * SVE is optional on AArch64 and SVE2 is an Armv9 addition, so both are
+ * genuine run-time questions -- unlike Advanced SIMD, which is mandatory.
+ * Graviton3 (Neoverse V1) has SVE at 256 bits and no SVE2; Graviton4
+ * (Neoverse V2) has SVE2 at 128.
+ *
+ * A build whose headers predate SVE cannot define HWCAP_SVE, and a binary
+ * built without the SVE kernels has nothing to gate anyway, so the fallback
+ * is 0 rather than a guess.
+ */
+int vb_cpu_has_sve(void)
+{
+#if defined(HWCAP_SVE) && VB_HAVE_SVE
+    return (getauxval(AT_HWCAP) & HWCAP_SVE) != 0;
+#else
+    return 0;
+#endif
+}
+
+int vb_cpu_has_sve2(void)
+{
+#if defined(HWCAP2_SVE2) && VB_HAVE_SVE2
+    return (getauxval(AT_HWCAP2) & HWCAP2_SVE2) != 0;
+#else
+    return 0;
 #endif
 }
 

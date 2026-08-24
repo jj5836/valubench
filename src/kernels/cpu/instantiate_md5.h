@@ -37,4 +37,10 @@
 #define MD5K_H      OPS_H
 #define MD5K_I      OPS_I
 
+/* An ISA whose vector type cannot be arrayed supplies hooks here; see
+   sve.c. Nothing else defines this. */
+#ifdef VB_MD5_HOOKS
+#  include VB_MD5_HOOKS
+#endif
+
 #include "md5_kernel_impl.h"

@@ -584,6 +584,27 @@ int main(int argc, char **argv)
                     k->name, k->isa);
             return VB_EXIT_USAGE;
         }
+        /*
+         * Every kernel's lanes x streams must divide the batch, or it cannot
+         * cover the corpus and the checksum would be over a different set of
+         * messages than every other kernel's.
+         *
+         * Only reachable with a vector-length-agnostic ISA, where lanes are
+         * not known when the table is written: 12 lanes at three streams is
+         * 36, and 36 does not divide 768. Autotune skips such a kernel
+         * silently, which is right, but naming one explicitly used to report
+         * "the hardware did not compute correct digests" -- blaming the
+         * silicon for what is a property of the vector length.
+         */
+        if (!vb_batch_divides(k)) {
+            fprintf(stderr,
+                    "valubench: kernel '%s' cannot run at this vector length: "
+                    "%u lanes x %u streams = %u, which does not divide the "
+                    "%u-message batch. Try a different stream count.\n",
+                    k->name, k->lanes, k->streams, k->lanes * k->streams,
+                    VB_BATCH_LCM);
+            return VB_EXIT_USAGE;
+        }
         /* Naming a kernel and then excluding where it runs is a contradiction,
            and silently honouring one over the other would mislabel the result.
         */

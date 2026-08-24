@@ -29,4 +29,10 @@
 #define S5K_F_CH   OPS64_CH
 #define S5K_F_MAJ  OPS64_MAJ
 
+/* An ISA whose vector type cannot be arrayed supplies hooks here; see
+   sve.c. Nothing else defines this. */
+#ifdef VB_SHA512_HOOKS
+#  include VB_SHA512_HOOKS
+#endif
+
 #include "sha512_kernel_impl.h"

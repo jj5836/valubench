@@ -127,6 +127,33 @@
 #  define VB_ISA_NEON(M)
 #endif
 
+/*
+ * SVE and SVE2 are the only ISAs whose lane count is not known here: the
+ * vector length is 128 to 2048 bits and the hardware chooses. They register
+ * lanes = 0 and name a function, and src/registry.c resolves it once.
+ *
+ * They are separate ISAs rather than one with a feature bit because for this
+ * workload they are separate instruction sets. SVE has no three-input bitwise
+ * select, no three-way XOR, no fused xor-rotate and no shift-right-insert;
+ * SVE2 has all four. Neoverse V1 offers SVE at 256 bits, V2 offers SVE2 at
+ * 128, so the comparison runs both ways on rentable hardware.
+ */
+#if VB_HAVE_SVE
+#  define VB_ISA_SVE(M) \
+       VB_FOR_ALGS(M, sve, "SVE", vb_cpu_has_sve, 0, 0, \
+                   vb_sve_lanes32, vb_sve_lanes64)
+#else
+#  define VB_ISA_SVE(M)
+#endif
+
+#if VB_HAVE_SVE2
+#  define VB_ISA_SVE2(M) \
+       VB_FOR_ALGS(M, sve2, "SVE2", vb_cpu_has_sve2, 0, 0, \
+                   vb_sve_lanes32, vb_sve_lanes64)
+#else
+#  define VB_ISA_SVE2(M)
+#endif
+
 /* ---- device kernels ------------------------------------------------------ */
 /*
  * Device kernels are not an ISA matrix -- there is one OpenCL backend and only
@@ -158,6 +185,8 @@
     VB_ISA_AVX2(M)            \
     VB_ISA_AVX512(M)          \
     VB_ISA_SHANI(M)           \
-    VB_ISA_NEON(M)
+    VB_ISA_NEON(M)            \
+    VB_ISA_SVE(M)             \
+    VB_ISA_SVE2(M)
 
 #endif /* VALUBENCH_KERNEL_MATRIX_H */

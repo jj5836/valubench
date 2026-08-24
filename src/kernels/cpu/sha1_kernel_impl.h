@@ -70,13 +70,17 @@ static const uint32_t SHA1_IV[5] = {
 #ifndef S1K_V
 #  define S1K_V(name, k)      name[k]
 #  define S1K_V2(name, k, i)  name[k][i]
-#  define S1K_SDECL(name)     S1K_VEC name[S1K_STREAMS];
-#  define S1K_SDECL2(name, n) S1K_VEC name[S1K_STREAMS][n];
+#  define S1K_SDECL_ALL                                          \
+        S1K_VEC fb[S1K_STREAMS][5];  /* digest fed into block 0 */ \
+        S1K_VEC h0[S1K_STREAMS], h1[S1K_STREAMS], h2[S1K_STREAMS]; \
+        S1K_VEC h3[S1K_STREAMS], h4[S1K_STREAMS];                  \
+        S1K_VEC A[S1K_STREAMS], B[S1K_STREAMS], C[S1K_STREAMS];    \
+        S1K_VEC D[S1K_STREAMS], E[S1K_STREAMS];
 #  define S1K_FOREACH(BODY) \
        for (unsigned k = 0; k < S1K_STREAMS; k++) { BODY(k) }
    /* The five-word digest, likewise: a loop by default, expanded where the
       index has to be a literal. */
-#  define S1K_FOR5(BODY) for (int j = 0; j < 5; j++) { BODY(j) }
+#  define S1K_FOR5(BODY, k) for (int j = 0; j < 5; j++) { BODY(k, j) }
 #  define S1K_FOLDN S1K_LANES
 #endif
 
@@ -187,15 +191,13 @@ void S1K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
     for (uint64_t g = 0; g < n_groups; g++) {
         const uint32_t *slot[S1K_STREAMS];
         S1K_WDECL
-        S1K_SDECL2(fb, 5)                  /* digest fed back into block 0 */
-        S1K_SDECL(h0) S1K_SDECL(h1) S1K_SDECL(h2) S1K_SDECL(h3) S1K_SDECL(h4)
-        S1K_SDECL(A)  S1K_SDECL(B)  S1K_SDECL(C)  S1K_SDECL(D)  S1K_SDECL(E)
+        S1K_SDECL_ALL
 
-#define S1K_LOAD_FB(j) \
+#define S1K_LOAD_FB(k, j) \
         S1K_V2(fb,k,j) = S1K_LOAD(slot[k] + (size_t) (j) * S1K_LANES);
 #define S1K_LOAD_SLOT(k)                                          \
         slot[k] = corpus + (g * S1K_STREAMS + (k)) * slot_words;          \
-        S1K_FOR5(S1K_LOAD_FB)
+        S1K_FOR5(S1K_LOAD_FB, k)
         S1K_FOREACH(S1K_LOAD_SLOT)
 #undef S1K_LOAD_SLOT
 #undef S1K_LOAD_FB
@@ -213,7 +215,7 @@ void S1K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 
         for (uint32_t b = 0; b < blocks; b++) {
 
-#define S1K_FEED_FB(j) S1K_WSET(k, j, S1K_V2(fb,k,j));
+#define S1K_FEED_FB(k, j) S1K_WSET(k, j, S1K_V2(fb,k,j));
 #define S1K_START_BLOCK(k)                                        \
         {                                                                 \
             const uint32_t *wp = slot[k] + (size_t) b * block_words;      \
@@ -222,7 +224,7 @@ void S1K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
             /* Block 0 carries the previous digest over the head of the   \
                message; every other block is corpus data unchanged. */    \
             if (b == 0)                                                   \
-                S1K_FOR5(S1K_FEED_FB)                                     \
+                S1K_FOR5(S1K_FEED_FB, k)                                     \
         }                                                                 \
         S1K_V(A,k) = S1K_V(h0,k); S1K_V(B,k) = S1K_V(h1,k);               \
         S1K_V(C,k) = S1K_V(h2,k); S1K_V(D,k) = S1K_V(h3,k);               \
@@ -291,8 +293,7 @@ void S1K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 
 #undef S1K_V
 #undef S1K_V2
-#undef S1K_SDECL
-#undef S1K_SDECL2
+#undef S1K_SDECL_ALL
 #undef S1K_FOREACH
 #undef S1K_FOR5
 #undef S1K_FOLDN

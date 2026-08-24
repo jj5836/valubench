@@ -30,4 +30,10 @@
 #define S1K_F_CH   OPS_CH
 #define S1K_F_MAJ  OPS_MAJ
 
+/* An ISA whose vector type cannot be arrayed supplies hooks here; see
+   sve.c. Nothing else defines this. */
+#ifdef VB_SHA1_HOOKS
+#  include VB_SHA1_HOOKS
+#endif
+
 #include "sha1_kernel_impl.h"

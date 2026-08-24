@@ -99,7 +99,25 @@ ifneq ($(filter aarch64 arm64,$(ARCH)),)
   HAVE_NEON := $(shell printf '#include <arm_neon.h>\nint main(void){uint32x4_t v=vdupq_n_u32(1);return (int)vgetq_lane_u32(v,0)-1;}' \
     > $(BUILD)/.neonprobe.c 2>/dev/null && \
     $(CC) -c -o $(BUILD)/.neonprobe.o $(BUILD)/.neonprobe.c >/dev/null 2>&1 && echo yes || echo no)
+
+  # SVE and SVE2 are optional on AArch64 and need an -march flag, so unlike
+  # NEON they are real probes. Probing compiles a vector operation rather than
+  # just the header: a toolchain can ship arm_sve.h and still reject +sve.
+  #
+  # This asks what the *compiler* can build, never what the machine can run --
+  # the kernels are gated at run time by HWCAP_SVE. A cross build for a machine
+  # we cannot execute is exactly the case that has to work.
+  HAVE_SVE := $(shell printf '#include <arm_sve.h>\nint main(void){svuint32_t a=svdup_n_u32(1);return (int)svaddv_u32(svptrue_b32(),a)-1;}' \
+    > $(BUILD)/.sveprobe.c 2>/dev/null && \
+    $(CC) -march=armv8-a+sve -c -o $(BUILD)/.sveprobe.o $(BUILD)/.sveprobe.c >/dev/null 2>&1 && echo yes || echo no)
+
+  HAVE_SVE2 := $(shell printf '#include <arm_sve.h>\nint main(void){svuint32_t a=svdup_n_u32(1);a=svbsl_u32(a,a,a);return (int)svaddv_u32(svptrue_b32(),a)-1;}' \
+    > $(BUILD)/.sve2probe.c 2>/dev/null && \
+    $(CC) -march=armv8-a+sve2 -c -o $(BUILD)/.sve2probe.o $(BUILD)/.sve2probe.c >/dev/null 2>&1 && echo yes || echo no)
 endif
+
+HAVE_SVE  ?= no
+HAVE_SVE2 ?= no
 
 ifeq ($(filter x86_64 i686 i386,$(ARCH)),)
   HAVE_SSE2   := no
@@ -153,6 +171,8 @@ KFLAGS_avx2   := -mavx2
 KFLAGS_avx512 := -mavx512f
 KFLAGS_shani  := -msha
 KFLAGS_neon   :=            # Advanced SIMD is the AArch64 baseline
+KFLAGS_sve    := -march=armv8-a+sve
+KFLAGS_sve2   := -march=armv8-a+sve2
 
 KERNELS := scalar
 KERNEL_DEFS :=
@@ -192,7 +212,28 @@ else
   KERNEL_DEFS += -DVB_HAVE_NEON=0
 endif
 
+ifeq ($(HAVE_SVE),yes)
+  KERNELS     += sve
+  KERNEL_DEFS += -DVB_HAVE_SVE=1
+else
+  KERNEL_DEFS += -DVB_HAVE_SVE=0
+endif
+
+ifeq ($(HAVE_SVE2),yes)
+  KERNELS     += sve2
+  KERNEL_DEFS += -DVB_HAVE_SVE2=1
+else
+  KERNEL_DEFS += -DVB_HAVE_SVE2=0
+endif
+
 KERNEL_OBJS := $(addprefix $(BUILD)/kernel_,$(addsuffix .o,$(KERNELS)))
+
+# The vector length in lanes, which the registry needs and which requires
+# arm_sve.h -- so it cannot live in registry.c, which must stay free of any
+# ISA flag. Its own translation unit, built with +sve, doing nothing else.
+ifeq ($(HAVE_SVE),yes)
+  KERNEL_OBJS += $(BUILD)/sve_lanes.o
+endif
 
 # OpenCL is dlopen'd, never linked: -ldl is the only addition, and the binary
 # runs unchanged on a machine with no GPU or no OpenCL at all.
@@ -285,6 +326,11 @@ $(BUILD)/ref_%.o: src/reference/%.c $(HDRS)
 
 $(BUILD)/kernel_%.o: src/kernels/cpu/%.c $(KHDRS) $(HDRS)
 	$(CC) $(CFLAGS) $(KFLAGS_$*) -c -o $@ $<
+
+# Not a kernel, but it needs +sve for arm_sve.h and must not be built without
+# it. KERNEL_DEFS so VB_HAVE_SVE means the same thing here as everywhere else.
+$(BUILD)/sve_lanes.o: src/kernels/cpu/sve_lanes.c $(HDRS)
+	$(CC) $(CFLAGS) $(KERNEL_DEFS) $(KFLAGS_sve) -c -o $@ $<
 
 # KERNEL_DEFS here too: backend.c includes the kernel matrix for the device
 # list, and without the ISA defines the matrix would mean something different in
