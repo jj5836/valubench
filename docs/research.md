@@ -233,7 +233,8 @@ cores (`c7g4xl-scaling-20260823`) found `sha1/neon-s2` scaling 14.64x where
 round-body stack traffic of 265, 90 and 594. If spilling drove multi-core
 scaling, s4 would be worst; it is better than s2. Whatever sets the *peak* at one
 thread is not what sets the *scaling* across many, and this method speaks only to
-the first.
+the first. That capture's own mechanism is still unexplained, with the candidates
+and the experiments that would separate them recorded alongside it.
 
 **What this does not establish.** These are static counts from one compiler
 version. A spill count is not a spill cost — store-to-load forwarding makes many
