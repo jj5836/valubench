@@ -78,6 +78,52 @@ for k in d["kernels"]:
             raise SystemExit(1)
 ' ; then pass=$((pass + 1)); else fail=1; fi
 
+# ---- the precomputed reference must equal the recomputed one ----------------
+#
+# --expect lets a sweep solve an iteration ladder once instead of per point,
+# which only stays honest if the supplied value is the value the binary would
+# have computed. So: emit a ladder, then run each rung twice -- once verifying
+# against the supplied answer, once against its own -- and require the same
+# checksum out of both. A wrong --expect must fail the run, or the flag is a
+# way to switch verification off rather than a way to speed it up.
+if "$BIN" --reference-ladder 1,2,4,8 --algorithm md5 --message-bytes 64 \
+        --working-set-kb 64 2>/dev/null | python3 -c '
+import json, subprocess, sys
+doc = json.load(sys.stdin)
+binary = sys.argv[1]
+if doc.get("schema") != "valubench/reference/1":
+    print("  FAIL  output-contract  reference schema is %r" % doc.get("schema"))
+    raise SystemExit(1)
+common = [binary, "--json", "--algorithm", "md5", "--message-bytes", "64",
+          "--working-set-kb", "64", "--kernel", "md5/scalar-s1",
+          "--samples", "1", "--time-ms", "20", "--warmup-ms", "20"]
+for rung in doc["checksums"]:
+    it = str(rung["iterations"])
+    def run(extra):
+        p = subprocess.run(common + ["--iterations", it] + extra,
+                           capture_output=True, text=True)
+        return p.returncode, p.stdout
+    rc_s, out_s = run(["--expect", rung["checksum"]])
+    rc_r, out_r = run([])
+    if rc_s not in (0, 3) or rc_r not in (0, 3):
+        print("  FAIL  output-contract  iterations=%s exited %d/%d"
+              % (it, rc_s, rc_r))
+        raise SystemExit(1)
+    got_s = json.loads(out_s)["verification"]["checksum"]
+    got_r = json.loads(out_r)["verification"]["checksum"]
+    if not (got_s == got_r == rung["checksum"]):
+        print("  FAIL  output-contract  iterations=%s: ladder %s, supplied %s, "
+              "recomputed %s" % (it, rung["checksum"], got_s, got_r))
+        raise SystemExit(1)
+    # A supplied value that is wrong must be caught, not trusted.
+    bad = "f" * len(rung["checksum"])
+    rc_bad, _ = run(["--expect", bad])
+    if rc_bad != 1:
+        print("  FAIL  output-contract  iterations=%s: a wrong --expect "
+              "exited %d, not 1" % (it, rc_bad))
+        raise SystemExit(1)
+' "$BIN"; then pass=$((pass + 1)); else fail=1; fi
+
 # ---- the documented exit codes must be the ones actually used ---------------
 #
 # usage=2 and noisy=3 are reachable from the command line. verify_failed=1 is
@@ -100,6 +146,11 @@ expect_exit 2 "trailing garbage"      "$BIN" --message-bytes 12x
 expect_exit 2 "negative"              "$BIN" --threads -4
 expect_exit 2 "out of range"          "$BIN" --samples 0
 expect_exit 2 "unknown algorithm"     "$BIN" --algorithm nosuchalg
+expect_exit 2 "expect, wrong width"   "$BIN" --expect deadbeef
+expect_exit 2 "expect, not hex"       "$BIN" --expect "$(printf 'z%.0s' $(seq 32))"
+expect_exit 2 "ladder descending"     "$BIN" --reference-ladder 8,4,1
+expect_exit 2 "ladder empty"          "$BIN" --reference-ladder ""
+expect_exit 2 "ladder not a list"     "$BIN" --reference-ladder "1;2"
 # A valid run exits 0, or 3 if the machine was too noisy to trust the number.
 # Both mean it ran; only 1 and 2 mean it did not. Asserting 0 here would make
 # this test flaky on precisely the shared, contended runners CI uses -- which is

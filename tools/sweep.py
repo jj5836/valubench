@@ -354,7 +354,53 @@ def load_completed(path):
             if r.get("hashes_per_sec") and r.get("point_id")}, True
 
 
-def run_point(args, caps, point):
+def precompute_references(args, points):
+    """Compute every point's expected checksum up front, one pass per corpus.
+
+    The iteration scheme is a chain -- hash, write the digest over the head of
+    the message, hash again -- so the digest after k iterations is a *prefix* of
+    the chain for any larger k. A ladder of 1, 2, 4 ... 1024 therefore asks for
+    the same walk over and over, once per point, and each walk is
+    messages x iterations of scalar hashing before anything is measured. On an
+    A10 that reached 733 seconds for a single point.
+
+    Walking each message once to the largest count and snapshotting at every
+    requested one replaces the whole ladder, and the binary splits that walk
+    across the cores. Points at one iteration are left alone: the reference
+    there is a single hash per message and costs nothing to redo.
+
+    Returns {(algorithm, message_bytes, working_set_kb): {iterations: hex}}.
+    A key missing from the result simply means those points verify the old way,
+    so a failure here costs time and never correctness.
+    """
+    ladders = {}
+    for p in points:
+        if p["iterations"] < 2:
+            continue
+        key = (p["algorithm"], p["message_bytes"], p["working_set_kb"])
+        ladders.setdefault(key, set()).add(p["iterations"])
+
+    out = {}
+    for key, iters in sorted(ladders.items()):
+        alg, mb, ws = key
+        rungs = sorted(iters)
+        cmd = [args.bin, "--reference-ladder", ",".join(str(i) for i in rungs),
+               "--algorithm", alg, "--message-bytes", str(mb),
+               "--working-set-kb", str(ws)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=args.timeout)
+            doc = json.loads(proc.stdout)
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            continue
+        if proc.returncode != 0:
+            continue
+        out[key] = {c["iterations"]: c["checksum"] for c in doc["checksums"]}
+
+    return out
+
+
+def run_point(args, caps, point, refs=None):
     """Run one configuration. Returns (status, result_dict_or_None)."""
     cmd = [
         args.bin, "--json",
@@ -368,6 +414,11 @@ def run_point(args, caps, point):
         "--time-ms", str(args.time_ms),
         "--warmup-ms", str(args.warmup_ms),
     ]
+    if refs:
+        got = refs.get((point["algorithm"], point["message_bytes"],
+                        point["working_set_kb"]), {}).get(point["iterations"])
+        if got:
+            cmd += ["--expect", got]
     if point["kernel"]:
         cmd += ["--kernel", point["kernel"]]
     elif point.get("where", "any") != "any":
@@ -888,6 +939,11 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     ap.add_argument("--warmup-ms", type=int, default=300)
     ap.add_argument("--no-pin", dest="pin", action="store_false",
                     help="do not pin worker threads to cores")
+    ap.add_argument("--no-precompute", action="store_true",
+                    help="have every point compute its own reference checksum "
+                         "instead of solving the iteration ladder once up "
+                         "front. Slower by design; use it to check that the "
+                         "precomputed answers and the per-point ones agree.")
     ap.add_argument("--timeout", type=float, default=900.0,
                     help="per-point timeout in seconds (default 900)")
     ap.add_argument("--resume", action="store_true",
@@ -1013,6 +1069,13 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     if not append:
         writer.writeheader()
 
+    refs = {} if args.no_precompute else precompute_references(args, points)
+    if refs and not args.quiet:
+        n = sum(len(v) for v in refs.values())
+        print("  precomputed %d expected checksums in %d pass%s"
+              % (n, len(refs), "" if len(refs) == 1 else "es"),
+              file=sys.stderr)
+
     rows, failures, started = [], 0, time.time()
 
     try:
@@ -1025,7 +1088,7 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                          point["working_set_kb"], point["threads"]),
                       end="", file=sys.stderr, flush=True)
 
-            status, result = run_point(args, caps, point)
+            status, result = run_point(args, caps, point, refs)
 
             if result is None:
                 failures += 1

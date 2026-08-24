@@ -61,6 +61,16 @@ static void usage(FILE *f, const char *argv0)
 "  --working-set-kb K   target corpus size (default 1024). Sets how many\n"
 "                       messages are hashed, so sweeping it walks the result\n"
 "                       from L1-resident to DRAM-bound.\n"
+"  --expect HEX         verify against this checksum instead of computing\n"
+"                       one. The expected value depends only on algorithm,\n"
+"                       message size, iterations and corpus range, never on\n"
+"                       the machine, so a sweep can solve a whole iteration\n"
+"                       ladder once and hand each point its answer.\n"
+"  --reference-ladder L ascending iteration counts, comma-separated. Emits\n"
+"                       the expected checksum for each as JSON, computed in\n"
+"                       one pass: the digest after k iterations is a prefix\n"
+"                       of the chain for any larger k, so a ladder costs one\n"
+"                       walk rather than one walk per rung.\n"
 "  --samples N          timed iterations (default 10, max %d)\n"
 "  --time-ms N          wall time per iteration (default 100)\n"
 "  --warmup-ms N        warm-up before timing (default 300)\n"
@@ -209,6 +219,136 @@ static int parse_uint(const char *flag, const char *arg,
 }
 
 /*
+ * A checksum supplied on the command line, in the same hex the tool prints:
+ * digest_words words, most significant first, each rendered at its natural
+ * width. Parsed against the selected algorithm, so --expect and --algorithm
+ * disagreeing is caught here rather than showing up as a verification failure.
+ */
+static int parse_expect(const char *hex, vb_config *cfg)
+{
+    unsigned nib = cfg->alg->word_bytes * 2;
+    size_t want = (size_t) cfg->alg->digest_words * nib;
+
+    if (strspn(hex, "0123456789abcdefABCDEF") != strlen(hex)
+        || strlen(hex) != want) {
+        fprintf(stderr, "valubench: --expect wants %zu hex digits for %s "
+                        "(got %zu)\n", want, cfg->alg->name, strlen(hex));
+        return 0;
+    }
+
+    memset(cfg->expected, 0, sizeof cfg->expected);
+    for (unsigned i = 0; i < cfg->alg->digest_words; i++) {
+        char word[17];
+        memcpy(word, hex + (size_t) i * nib, nib);
+        word[nib] = 0;
+        cfg->expected[i] = strtoull(word, NULL, 16);
+    }
+    cfg->have_expected = 1;
+    return 1;
+}
+
+/*
+ * An ascending list of iteration counts, for --reference-ladder.
+ *
+ * Ascending is a requirement of the checkpointed walk rather than a
+ * convenience: it snapshots as it passes each count, so an out-of-order entry
+ * would be silently skipped. Rejecting it here is the difference between a
+ * usage error and a wrong answer.
+ */
+static int parse_ladder(const char *arg, uint32_t *out, unsigned max,
+                        unsigned *n_out)
+{
+    unsigned n = 0;
+
+    for (const char *p = arg; *p; ) {
+        char *end;
+        errno = 0;
+        unsigned long v = strtoul(p, &end, 10);
+
+        if (end == p || errno == ERANGE || v < 1 || v > (1u << 24)) {
+            fprintf(stderr, "valubench: --reference-ladder wants iteration "
+                            "counts between 1 and %u, got '%s'\n",
+                    1u << 24, p);
+            return 0;
+        }
+        if (n == max) {
+            fprintf(stderr, "valubench: --reference-ladder takes at most %u "
+                            "counts\n", max);
+            return 0;
+        }
+        if (n && v <= out[n - 1]) {
+            fprintf(stderr, "valubench: --reference-ladder must ascend "
+                            "(%lu after %u)\n", v, out[n - 1]);
+            return 0;
+        }
+        out[n++] = (uint32_t) v;
+
+        p = end;
+        if (*p == ',') p++;
+        else if (*p)   { fprintf(stderr, "valubench: --reference-ladder wants "
+                                         "a comma-separated list, got '%s'\n",
+                                 p); return 0; }
+    }
+
+    if (n == 0) {
+        fprintf(stderr, "valubench: --reference-ladder is empty\n");
+        return 0;
+    }
+    *n_out = n;
+    return 1;
+}
+
+/*
+ * Emit the expected checksums for a whole iteration ladder.
+ *
+ * This is the caller the checkpointed reference was written for. A crossover
+ * sweep asks for the same chain over and over -- the digest after k iterations
+ * is a prefix of the chain for any larger k -- so one walk to the largest
+ * count, snapshotting as it goes, replaces one walk per rung. Split across the
+ * cores as well and a pass that used to dominate a session disappears into it.
+ *
+ * The corpus identity travels with the answers, because a checksum is only
+ * meaningful for the exact range it was computed over: a consumer that reuses
+ * these values under a different algorithm, message size or working set would
+ * be verifying against the wrong truth. sweep.py keys its cache on them.
+ */
+static void emit_reference_ladder(const vb_config *cfg, const uint32_t *iters,
+                                  unsigned n)
+{
+    uint64_t count = vb_batch_messages(cfg);
+    uint64_t (*out)[VB_MAX_DIGEST_WORDS] = calloc(n, sizeof *out);
+
+    if (!out) {
+        fprintf(stderr, "valubench: out of memory\n");
+        return;
+    }
+
+    vb_reference_checksums_mt(cfg->alg, 0, count, cfg->message_bytes,
+                              iters, n, vb_online_cpus(), out);
+
+    printf("{\n");
+    printf("  \"schema\": \"valubench/reference/1\",\n");
+    printf("  \"algorithm\": \"%s\",\n", cfg->alg->name);
+    printf("  \"message_bytes\": %u,\n", cfg->message_bytes);
+    printf("  \"working_set_kb\": %u,\n", cfg->working_set_kb);
+    printf("  \"start_index\": 0,\n");
+    printf("  \"count\": %llu,\n", (unsigned long long) count);
+    printf("  \"checksums\": [\n");
+    for (unsigned k = 0; k < n; k++) {
+        printf("    { \"iterations\": %u, \"checksum\": \"", iters[k]);
+        for (unsigned i = 0; i < cfg->alg->digest_words; i++) {
+            if (cfg->alg->word_bytes == 8)
+                printf("%016llx", (unsigned long long) out[k][i]);
+            else
+                printf("%08x", (unsigned) out[k][i]);
+        }
+        printf("\" }%s\n", k + 1 < n ? "," : "");
+    }
+    printf("  ]\n}\n");
+    free(out);
+}
+
+/*
  * Listing is an action rather than a run, but it cannot happen while the
  * command line is still being read: `--list --json` and `--json --list` have to
  * mean the same thing, and they did not when --list returned from inside the
@@ -218,7 +358,8 @@ static int parse_uint(const char *flag, const char *arg,
 typedef enum {
     ACT_RUN = 0,
     ACT_LIST_KERNELS,
-    ACT_LIST_DEVICES
+    ACT_LIST_DEVICES,
+    ACT_REFERENCE
 } vb_action;
 
 int main(int argc, char **argv)
@@ -226,6 +367,11 @@ int main(int argc, char **argv)
     vb_config cfg;
     int as_json = 0, verbose = 0;
     vb_action action = ACT_RUN;
+    /* Both are resolved after the loop, for the same reason --list is: they
+       depend on --algorithm, which may appear either side of them. */
+    const char *expect_arg = NULL, *ladder_arg = NULL;
+    uint32_t ladder[VB_MAX_LADDER];
+    unsigned n_ladder = 0;
 
     vb_config_defaults(&cfg);
 
@@ -295,6 +441,13 @@ int main(int argc, char **argv)
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             if (!parse_uint(a, argv[++i], 1, VB_MAX_THREADS, &cfg.threads))
                 return VB_EXIT_USAGE;
+        } else if (!strcmp(a, "--expect")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            expect_arg = argv[++i];
+        } else if (!strcmp(a, "--reference-ladder")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            ladder_arg = argv[++i];
+            action = ACT_REFERENCE;
         } else if (!strcmp(a, "--iterations")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             if (!parse_uint(a, argv[++i], 1, 1u << 24, &cfg.iterations))
@@ -342,6 +495,7 @@ int main(int argc, char **argv)
         else
             list_devices();
         return VB_EXIT_OK;
+    case ACT_REFERENCE:
     case ACT_RUN:
         break;
     }
@@ -388,6 +542,19 @@ int main(int argc, char **argv)
     if (cfg.threads > VB_MAX_THREADS) {
         fprintf(stderr, "valubench: --threads must be 0..%d\n", VB_MAX_THREADS);
         return VB_EXIT_USAGE;
+    }
+
+    /* Resolved here rather than in the loop: both are interpreted against the
+       algorithm, and --algorithm may come after them on the command line. */
+    if (ladder_arg && !parse_ladder(ladder_arg, ladder, VB_MAX_LADDER,
+                                    &n_ladder))
+        return VB_EXIT_USAGE;
+    if (expect_arg && !parse_expect(expect_arg, &cfg))
+        return VB_EXIT_USAGE;
+
+    if (action == ACT_REFERENCE) {
+        emit_reference_ladder(&cfg, ladder, n_ladder);
+        return VB_EXIT_OK;
     }
 
     vb_sysinfo si;

@@ -146,6 +146,7 @@ typedef struct {
     const void *corpus;         /* start of this slice within the corpus */
     uint64_t   groups;          /* groups in this slice */
     uint64_t   expected[VB_MAX_DIGEST_WORDS];  /* reference for this slice */
+    uint64_t   checksum[VB_MAX_DIGEST_WORDS];  /* what this slice produced */
 
     /* What this worker needs to compute `expected` itself. The reference pass
        costs iterations x messages of scalar hashing and used to run serially on
@@ -169,6 +170,9 @@ struct vb_pool {
     uint32_t          iterations;
     uint64_t          reps;     /* set by the driver before each release */
     int               stop;
+    /* A whole-corpus reference supplied by the caller. See vb_config. */
+    int               have_expected;
+    uint64_t          expected[VB_MAX_DIGEST_WORDS];
     pthread_barrier_t start_bar;
     pthread_barrier_t done_bar;
 };
@@ -192,10 +196,23 @@ static void run_slice(vb_pool *p, vb_worker *w)
 
     for (uint64_t r = 0; r < p->reps && ok; r++) {
         p->k->fn(w->corpus, w->groups, p->blocks, p->iterations, cs);
-        /* Each thread checks its own slice against its own reference value, so
-           verification needs no cross-thread synchronisation. */
-        if (memcmp(cs, w->expected, sizeof cs) != 0)
+
+        if (p->have_expected) {
+            /* A supplied reference is for the whole corpus, so there is no
+               per-slice value to compare against and the gate moves to the
+               aggregate in pool_run. Rep-to-rep agreement still belongs here:
+               it costs nothing, needs no reference, and catches a kernel that
+               is not a function of its input -- which is most of what the
+               per-rep comparison was doing. */
+            if (r == 0)
+                memcpy(w->checksum, cs, sizeof cs);
+            else if (memcmp(cs, w->checksum, sizeof cs) != 0)
+                ok = 0;
+        } else if (memcmp(cs, w->expected, sizeof cs) != 0) {
+            /* Each thread checks its own slice against its own reference value,
+               so verification needs no cross-thread synchronisation. */
             ok = 0;
+        }
     }
 
     w->ok = ok;
@@ -205,6 +222,8 @@ static void run_slice(vb_pool *p, vb_worker *w)
    and the result is identical to computing the whole range serially. */
 static void worker_reference(vb_worker *w)
 {
+    if (w->pool->have_expected)
+        return;                 /* the caller already knows the answer */
     vb_reference_checksum(w->ref_alg, w->ref_start, w->ref_count,
                           w->ref_message_bytes, w->ref_iterations, w->expected);
 }
@@ -268,6 +287,8 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
     p->k = k;
     p->blocks = corpus->blocks;
     p->iterations = cfg->iterations;
+    p->have_expected = cfg->have_expected;
+    memcpy(p->expected, cfg->expected, sizeof p->expected);
 
     p->w = calloc(threads, sizeof *p->w);
     if (!p->w)
@@ -340,6 +361,20 @@ static uint64_t pool_run(vb_pool *p, uint64_t reps, int *ok)
         if (!p->w[i].ok)
             *ok = 0;
 
+    /* With a supplied reference the slices have nothing of their own to check
+       against, so the whole-corpus XOR is where the comparison happens. It is
+       weaker than per-slice by exactly one case -- two slices erring so as to
+       cancel -- and the single-threaded gate in vb_validate_kernel has already
+       run this kernel over the whole corpus against the same value. */
+    if (*ok && p->have_expected && p->reps > 0) {
+        uint64_t agg[VB_MAX_DIGEST_WORDS] = { 0 };
+        for (unsigned i = 0; i < p->n; i++)
+            for (unsigned j = 0; j < VB_MAX_DIGEST_WORDS; j++)
+                agg[j] ^= p->w[i].checksum[j];
+        if (memcmp(agg, p->expected, sizeof agg) != 0)
+            *ok = 0;
+    }
+
     return *ok ? elapsed : 0;
 }
 
@@ -357,10 +392,16 @@ int vb_validate_kernel(const vb_kernel *k, const vb_config *cfg,
 
     /* No worker pool on this path -- it is what a device kernel and `make check`
        use -- so parallelise the reference itself. This was the single largest
-       cost of a GPU crossover sweep: one core, minutes per point. */
-    vb_reference_checksum_mt(cfg->alg, corpus->start_index, corpus->n_messages,
-                             cfg->message_bytes, cfg->iterations,
-                             vb_online_cpus(), expected);
+       cost of a GPU crossover sweep: one core, minutes per point.
+
+       Unless the caller already knows the answer: a sweep that precomputed the
+       whole ladder in one pass passes it in, and this pass disappears. */
+    if (cfg->have_expected)
+        memcpy(expected, cfg->expected, VB_MAX_DIGEST_WORDS * sizeof *expected);
+    else
+        vb_reference_checksum_mt(cfg->alg, corpus->start_index,
+                                 corpus->n_messages, cfg->message_bytes,
+                                 cfg->iterations, vb_online_cpus(), expected);
     k->fn(corpus->words, corpus->n_messages / group, corpus->blocks,
           cfg->iterations, checksum_out);
 
@@ -548,10 +589,13 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
            hashing per point, and on an A10 that was 733 seconds of a single
            core for one point, with nothing else running. Each device's slice
            is independent, so the split within a slice is free. */
-        vb_reference_checksum_mt(cfg->alg,
-                                 corpus->start_index + (uint32_t) (off * group),
-                                 mine * group, cfg->message_bytes,
-                                 cfg->iterations, vb_online_cpus(), expect[i]);
+        if (!cfg->have_expected)
+            vb_reference_checksum_mt(cfg->alg,
+                                     corpus->start_index
+                                         + (uint32_t) (off * group),
+                                     mine * group, cfg->message_bytes,
+                                     cfg->iterations, vb_online_cpus(),
+                                     expect[i]);
         off += mine;
     }
 
@@ -575,7 +619,8 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
                 uint64_t part[VB_MAX_DIGEST_WORDS];                                          \
                 if (vb_ocl_ctx_collect(&ctx[i], part) != 0)                \
                     goto ok_label;                                         \
-                if (memcmp(part, expect[i], sizeof part) != 0)             \
+                if (!cfg->have_expected                                    \
+                    && memcmp(part, expect[i], sizeof part) != 0)           \
                     mismatch = 1;                                          \
                 for (int w = 0; w < VB_MAX_DIGEST_WORDS; w++) got[w] ^= part[w];             \
             }                                                              \
@@ -590,9 +635,22 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     }
 
     uint64_t expected_all[VB_MAX_DIGEST_WORDS] = { 0 };
-    for (int i = 0; i < n_use; i++)
-        for (int w = 0; w < VB_MAX_DIGEST_WORDS; w++)
-            expected_all[w] ^= expect[i][w];
+    if (cfg->have_expected) {
+        /* With a supplied value there is nothing to check per device, so the
+           whole-corpus XOR is the gate. That is weaker by exactly one case --
+           two devices erring so as to cancel -- and stronger in the way that
+           matters here, because the value came from a pass that no device
+           influenced. */
+        memcpy(expected_all, cfg->expected, sizeof expected_all);
+        if (memcmp(got, expected_all, sizeof got) != 0) {
+            memcpy(out->checksum, got, sizeof got);
+            goto fail_run;
+        }
+    } else {
+        for (int i = 0; i < n_use; i++)
+            for (int w = 0; w < VB_MAX_DIGEST_WORDS; w++)
+                expected_all[w] ^= expect[i][w];
+    }
     memcpy(out->checksum, expected_all, sizeof expected_all);
 
     /* Calibrate reps so a timed sample lasts roughly target_ms, growing until

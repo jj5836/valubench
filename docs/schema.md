@@ -80,6 +80,26 @@ Unavailable kernels are listed too, with `available: false`. "This build has
 AVX-512 kernels but this CPU cannot run them" is a different situation from
 "this build has none", and a sweep should be able to tell them apart.
 
+## `valubench/reference/1`
+
+`--reference-ladder 1,2,4,8` emits the expected checksum for each iteration
+count, alongside the corpus the values are for: `algorithm`, `message_bytes`,
+`working_set_kb`, `start_index` and `count`.
+
+The corpus identity travels with the answers because a checksum only means
+anything for the exact range it was computed over. A consumer that reused these
+values under a different message size or working set would be verifying against
+the wrong truth and would not find out — which is the one way a precomputed
+gate can be worse than no gate at all. `sweep.py` keys its cache on all three.
+
+Why the document exists: the digest after *k* iterations is a prefix of the
+chain for any larger *k*, so an iteration ladder asks for the same walk over and
+over. One pass to the largest count, snapshotting at each rung, replaces the
+whole ladder, and the saving is the ladder's sum over its maximum — 2x for a
+nine-rung power-of-two ladder, 4x for the fifteen-rung ones a crossover sweep
+generates. Feed a rung back with `--expect` and that point skips its own
+reference pass entirely.
+
 ## CSV from `tools/sweep.py`
 
 One row per measured point, in the column order of `CSV_COLUMNS` in

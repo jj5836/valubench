@@ -194,6 +194,10 @@ typedef struct {
 /* Registry. Kernels whose available() returns 0 are never selected. */
 const vb_kernel *vb_kernels(size_t *count);
 
+/* Rungs a single --reference-ladder may carry. A crossover sweep is a power-of
+   -two ladder, so 64 covers any range the iteration count itself permits. */
+#define VB_MAX_LADDER 64
+
 /* Reference checksum over [start, start+count), via the algorithm's scalar
    reference implementation. The _mt form splits the range across `threads` and
    XORs the parts, which is exact -- XOR is associative and commutative -- and
@@ -217,5 +221,15 @@ void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
                               uint64_t count, uint32_t message_bytes,
                               uint32_t iterations, unsigned threads,
                               uint64_t checksum[VB_MAX_DIGEST_WORDS]);
+
+/* Both savings at once: one pass over the corpus for the whole ladder, split
+   across `threads`. A crossover sweep asks for the same chain prefix at every
+   rung, so this is the difference between a reference pass that dominates the
+   session and one that disappears into it. */
+void vb_reference_checksums_mt(const vb_algorithm *alg, uint32_t start,
+                               uint64_t count, uint32_t message_bytes,
+                               const uint32_t *iters, unsigned n_iters,
+                               unsigned threads,
+                               uint64_t out[][VB_MAX_DIGEST_WORDS]);
 
 #endif /* VALUBENCH_H */

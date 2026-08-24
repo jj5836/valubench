@@ -176,35 +176,47 @@ struct ref_slice {
     uint32_t start;
     uint64_t count;
     uint32_t message_bytes;
-    uint32_t iterations;
-    uint64_t out[VB_MAX_DIGEST_WORDS];
+    const uint32_t *iters;
+    unsigned n_iters;
+    uint64_t (*out)[VB_MAX_DIGEST_WORDS];   /* n_iters entries, owned by caller */
 };
 
 static void *ref_slice_main(void *arg)
 {
     struct ref_slice *sl = (struct ref_slice *) arg;
-    vb_reference_checksum(sl->alg, sl->start, sl->count, sl->message_bytes,
-                          sl->iterations, sl->out);
+    vb_reference_checksums(sl->alg, sl->start, sl->count, sl->message_bytes,
+                           sl->iters, sl->n_iters, sl->out);
     return NULL;
 }
 
-void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
-                              uint64_t count, uint32_t message_bytes,
-                              uint32_t iterations, unsigned threads,
-                              uint64_t checksum[VB_MAX_DIGEST_WORDS])
+void vb_reference_checksums_mt(const vb_algorithm *alg, uint32_t start,
+                               uint64_t count, uint32_t message_bytes,
+                               const uint32_t *iters, unsigned n_iters,
+                               unsigned threads,
+                               uint64_t out[][VB_MAX_DIGEST_WORDS])
 {
+    if (n_iters == 0)
+        return;
+
+    memset(out, 0, (size_t) n_iters * VB_MAX_DIGEST_WORDS * sizeof(uint64_t));
+
     if (threads < 2 || count < threads) {
-        vb_reference_checksum(alg, start, count, message_bytes, iterations,
-                              checksum);
+        vb_reference_checksums(alg, start, count, message_bytes, iters,
+                               n_iters, out);
         return;
     }
 
     struct ref_slice *sl = calloc(threads, sizeof *sl);
     pthread_t *tid = calloc(threads, sizeof *tid);
-    if (!sl || !tid) {                    /* fall back rather than fail */
-        free(sl); free(tid);
-        vb_reference_checksum(alg, start, count, message_bytes, iterations,
-                              checksum);
+    /* One block for every slice's whole ladder, so the per-slice pointers are
+       offsets into it and there is a single allocation to check and free. */
+    uint64_t (*part)[VB_MAX_DIGEST_WORDS] =
+        calloc((size_t) threads * n_iters, sizeof *part);
+
+    if (!sl || !tid || !part) {           /* fall back rather than fail */
+        free(sl); free(tid); free(part);
+        vb_reference_checksums(alg, start, count, message_bytes, iters,
+                               n_iters, out);
         return;
     }
 
@@ -215,24 +227,35 @@ void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
         sl[i].start = start + (uint32_t) off;
         sl[i].count = base + (i < extra ? 1 : 0);
         sl[i].message_bytes = message_bytes;
-        sl[i].iterations = iterations;
+        sl[i].iters = iters;
+        sl[i].n_iters = n_iters;
+        sl[i].out = part + (size_t) i * n_iters;
         off += sl[i].count;
         if (i > 0 && pthread_create(&tid[i], NULL, ref_slice_main, &sl[i]) == 0)
             spawned = i;
     }
     ref_slice_main(&sl[0]);               /* this thread takes slice 0 */
 
-    uint64_t acc[VB_MAX_DIGEST_WORDS] = { 0 };
     for (unsigned i = 0; i < threads; i++) {
         if (i > 0 && i <= spawned)
             pthread_join(tid[i], NULL);
         else if (i > 0)
             ref_slice_main(&sl[i]);       /* a create failed; do it here */
-        for (unsigned j = 0; j < VB_MAX_DIGEST_WORDS; j++)
-            acc[j] ^= sl[i].out[j];
+        for (unsigned k = 0; k < n_iters; k++)
+            for (unsigned j = 0; j < VB_MAX_DIGEST_WORDS; j++)
+                out[k][j] ^= sl[i].out[k][j];
     }
-    memcpy(checksum, acc, sizeof acc);
-    free(sl); free(tid);
+    free(sl); free(tid); free(part);
+}
+
+void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,
+                              uint64_t count, uint32_t message_bytes,
+                              uint32_t iterations, unsigned threads,
+                              uint64_t checksum[VB_MAX_DIGEST_WORDS])
+{
+    vb_reference_checksums_mt(alg, start, count, message_bytes, &iterations, 1,
+                              threads,
+                              (uint64_t (*)[VB_MAX_DIGEST_WORDS]) checksum);
 }
 
 /*

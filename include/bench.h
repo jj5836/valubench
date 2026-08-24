@@ -141,6 +141,25 @@ typedef struct {
     double   cov_threshold;     /* result flagged unstable above this */
     int      pin_cpu;           /* pin worker threads to distinct cores */
     const char *force_kernel;   /* NULL = autotune */
+
+    /*
+     * A reference checksum supplied by the caller instead of recomputed here.
+     *
+     * The expected value is a pure function of (algorithm, message_bytes,
+     * iterations, start_index, count) and of the reference implementation --
+     * no machine dependence at all, which is the same invariance the
+     * cross-machine fingerprint rests on. So a sweep can compute a whole
+     * iteration ladder in one checkpointed pass (--reference-ladder) and hand
+     * each point its answer, rather than every point walking the same chain
+     * prefix again.
+     *
+     * The gate is unchanged in kind: the kernel's output must still equal a
+     * value produced by the scalar reference. What changes is when that value
+     * was computed, so the result records `expected_source` and a reader can
+     * tell the difference.
+     */
+    uint64_t expected[VB_MAX_DIGEST_WORDS];
+    int      have_expected;
 } vb_config;
 
 void vb_config_defaults(vb_config *cfg);
