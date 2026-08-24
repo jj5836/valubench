@@ -181,6 +181,60 @@ inside the kernel.
 **This is the single most important tuning knob in the whole benchmark** and it
 needs to be a measured, auto-tuned parameter rather than a guess.
 
+### 2.4b What sets the best stream count — read from the generated code
+
+2.4 says stream count is the most important tuning knob. It does not say what
+decides where the knob stops paying, and measurement produced an ordering that
+looked backwards.
+
+**The anomaly.** Live state per stream orders the algorithms identically on both
+architectures — MD5 four streams, SHA-1 one to two, SHA-512 one — but does not
+predict the peak *across* machines. AArch64 has 31 general-purpose registers to
+x86-64's 16, and yet `sha1/scalar` peaks at **s1** on Neoverse V1 and **s2** on
+Zen 5. Twice the register file, and it streams *less*.
+
+**Method.** Disassemble every scalar kernel at s1..s4 for both targets (gcc
+13.3, same source, `-fno-tree-vectorize`) and count loads and stores whose
+address is formed from the stack pointer or frame pointer. Nothing else
+legitimately lives on the stack in these functions: messages arrive through a
+pointer argument and digests leave through another. The AArch64 ABI prologue is
+excluded — it saves callee-saved registers with `stp`/`ldp` through memory where
+x86-64 uses `push`/`pop`, which carry no memory operand, so counting it would
+have penalised ARM by a fixed amount unrelated to the round body.
+
+Round-body stack traffic, AArch64 relative to x86-64:
+
+| | s1 | s2 | s3 | s4 | measured peak, x86 / ARM |
+|---|---:|---:|---:|---:|---|
+| md5 | −20% | −16% | −24% | −51% | s4 / s4 |
+| sha1 | **−57%** | −12% | −11% | **+5%** | s2 / s1 |
+| sha512 | **−49%** | −45% | +12% | **+29%** | s1 / s1 |
+
+**The register file raises the floor, not the ceiling.** AArch64's advantage is
+concentrated entirely at one stream — 57% less stack traffic on SHA-1, 49% on
+SHA-512 — and it is spent by the second stream, inverted by the fourth. So ARM
+peaks at a lower stream count not because streaming is worse there, but because
+**s1 is unusually good**. On x86-64 one stream already spills, so the extra
+instruction-level parallelism of a second is worth more than the spilling it
+adds. On AArch64 one stream nearly fits, so the second is a real regression.
+
+**Why SHA-1 specifically.** Per-stream live state is about 4–8 values for MD5
+(it indexes the message words in place), 21 for SHA-1 (5 state plus a 16-word
+rolling schedule window) and 24 for SHA-512. Usable registers are roughly 14 on
+x86-64 and 28 on AArch64. SHA-1 is the only algorithm whose per-stream state
+falls **between** the two register files, and it is the only algorithm whose best
+stream count differs between the two architectures. MD5 fits in both and streams
+to s4 everywhere; SHA-512's second stream needs 48 live values and overflows
+both, so both peak at s1.
+
+**What this does not establish.** These are static counts from one compiler
+version. A spill count is not a spill cost — store-to-load forwarding makes many
+of these nearly free, and the out-of-order window, which 8a names as the other
+candidate variable, is invisible to this method. What the counts do settle is
+the negative: **register count does not predict the peak stream count**, and the
+mechanism that does track it is where the spilling starts rather than how much
+of it there is.
+
 ### 2.5 Autotune
 
 Serious GPU hash implementations do not ask the user for work sizes. They search
