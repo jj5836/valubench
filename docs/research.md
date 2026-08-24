@@ -227,6 +227,14 @@ stream count differs between the two architectures. MD5 fits in both and streams
 to s4 everywhere; SHA-512's second stream needs 48 live values and overflows
 both, so both peak at s1.
 
+**And spill counts do not explain scaling.** A follow-up on sixteen Graviton3
+cores (`c7g4xl-scaling-20260823`) found `sha1/neon-s2` scaling 14.64x where
+`sha1/neon-s1` scales 15.97x and `sha1/neon-s4` 15.01x, against per-stream
+round-body stack traffic of 265, 90 and 594. If spilling drove multi-core
+scaling, s4 would be worst; it is better than s2. Whatever sets the *peak* at one
+thread is not what sets the *scaling* across many, and this method speaks only to
+the first.
+
 **What this does not establish.** These are static counts from one compiler
 version. A spill count is not a spill cost — store-to-load forwarding makes many
 of these nearly free, and the out-of-order window, which 8a names as the other
