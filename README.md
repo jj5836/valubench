@@ -4,7 +4,7 @@
 [![license: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
 An integer SIMD microbenchmark. It measures how fast hardware executes the
-general-purpose integer vector path, using MD5 as the vehicle, and verifies that
+general-purpose integer vector path, using hashing as the vehicle, and verifies that
 the hardware computed the right answer while doing it.
 
 Public domain (Unlicense). Builds with a C11 compiler and make. No configure
@@ -168,29 +168,6 @@ That gives three things for the price of one:
 The scalar references are deliberately separate implementations, written from
 RFC 1321 and FIPS 180-4 rather than shared with the kernels, so that agreement
 between them is evidence rather than a tautology.
-
-## Results
-
-Figures below are examples of what the tool reports, each naming the machine it
-came from. They are not a results database — this project deliberately does not
-ship one, because a number without its machine, compiler and workload is not
-comparable to anything. MD5, one thread:
-
-| | EPYC 9R45 (Zen 5) | Xeon 8488C (SPR) | Xeon 4210 (CLX) | N100 (Gracemont) | Graviton3 |
-|---|---:|---:|---:|---:|---:|
-| best kernel | `avx512-s4` | `avx512-s4` | `avx512-s2` | `avx2-s4` | `neon-s4` |
-| MH/s | **344** | 269 | 178 | 55 | 46 |
-
-*One thread, 55-byte messages, gcc 13.3 except Xeon 4210 (15.2). August 2026.*
-
-Three findings from those runs give the flavour of what the tool is for.
-AVX-512 is worth **2.72x** over AVX2 on a full-width AMD datapath but **2.20x
-to 2.33x** on three Intel server generations where the issue ports fuse. The
-dedicated SHA-NI unit ranges from **2.13x faster** than the vector path beside
-it to **0.25x as fast** — an 8.5x spread on the same instructions. And on a
-discrete GPU, offloading beats the entire 30-core host from **42 iterations**
-while the PCIe link keeps binding until **139** — two numbers that answer
-different questions and order the opposite way to intuition.
 
 ## Documentation
 
