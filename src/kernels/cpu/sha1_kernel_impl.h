@@ -104,14 +104,32 @@ static const uint32_t SHA1_IV[5] = {
         S1K_V(a,k) = tmp;                                        \
     }
 
-/* Expand one schedule word in place, for t >= 16. */
-#define S1K_EXPAND1(k, t)                                        \
-    {                                                            \
+/*
+ * The schedule word is a three-way XOR, a fourth XOR, and a rotate. An ISA
+ * with EOR3 and a fused xor-rotate does it in two instructions; everything
+ * else composes it from two-input operations, in exactly the statement form
+ * this template has always used, so that its generated code does not move.
+ */
+#if defined(S1K_XOR3) && defined(S1K_XORROT)
+#  define S1K_EXPAND_BODY(k, t)                                  \
+        S1K_VEC x = S1K_XOR3(S1K_WGET(k, ((t) -  3) & 15),       \
+                             S1K_WGET(k, ((t) -  8) & 15),       \
+                             S1K_WGET(k, ((t) - 14) & 15));      \
+        S1K_WSET(k, (t) & 15,                                    \
+                 S1K_XORROT(x, S1K_WGET(k, ((t) - 16) & 15), 1));
+#else
+#  define S1K_EXPAND_BODY(k, t)                                  \
         S1K_VEC x = S1K_XOR(S1K_WGET(k, ((t) - 3) & 15),         \
                             S1K_WGET(k, ((t) - 8) & 15));        \
         x = S1K_XOR(x, S1K_WGET(k, ((t) - 14) & 15));            \
         x = S1K_XOR(x, S1K_WGET(k, ((t) - 16) & 15));            \
-        S1K_WSET(k, (t) & 15, S1K_ROTL(x, 1));                   \
+        S1K_WSET(k, (t) & 15, S1K_ROTL(x, 1));
+#endif
+
+/* Expand one schedule word in place, for t >= 16. */
+#define S1K_EXPAND1(k, t)                                        \
+    {                                                            \
+        S1K_EXPAND_BODY(k, t)                                    \
     }
 
 /*
@@ -300,6 +318,7 @@ void S1K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 #undef S1K_WDECL
 #undef S1K_WGET
 #undef S1K_WSET
+#undef S1K_EXPAND_BODY
 #undef S1K_STEP1
 #undef S1K_EXPAND1
 #undef S1K_EACH

@@ -41,7 +41,7 @@
 
 /* The schedule window: a scalar buffer, strided by the run-time lane count. */
 #define S1K_WDECL           uint32_t wbuf[S1K_STREAMS * 16 * VB_MAX_LANES];
-#define S1K_WAT(k, i)       (wbuf + (((k) * 16 + (i)) * (size_t) S1K_LANES))
+#define S1K_WAT(k, i)       (wbuf + ((size_t) ((k) * 16 + (i)) * (size_t) S1K_LANES))
 #define S1K_WGET(k, i)      S1K_LOAD(S1K_WAT(k, i))
 #define S1K_WSET(k, i, v)   S1K_STORE(S1K_WAT(k, i), (v))
 

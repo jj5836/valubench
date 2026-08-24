@@ -28,10 +28,16 @@
 #include <stddef.h>
 
 /* FIPS 180-4 section 4.1.3. */
-#define S5K_BSIG0(x) S5K_XOR(S5K_XOR(S5K_ROTR(x, 28), S5K_ROTR(x, 34)), S5K_ROTR(x, 39))
-#define S5K_BSIG1(x) S5K_XOR(S5K_XOR(S5K_ROTR(x, 14), S5K_ROTR(x, 18)), S5K_ROTR(x, 41))
-#define S5K_SSIG0(x) S5K_XOR(S5K_XOR(S5K_ROTR(x,  1), S5K_ROTR(x,  8)), S5K_SHR(x, 7))
-#define S5K_SSIG1(x) S5K_XOR(S5K_XOR(S5K_ROTR(x, 19), S5K_ROTR(x, 61)), S5K_SHR(x, 6))
+/* Every sigma is a three-way XOR, so an ISA with EOR3 saves one instruction in
+   each of the four, four times per round. Composed from two XORs otherwise. */
+#ifndef S5K_XOR3
+#  define S5K_XOR3(a, b, c) S5K_XOR(S5K_XOR((a), (b)), (c))
+#endif
+
+#define S5K_BSIG0(x) S5K_XOR3(S5K_ROTR(x, 28), S5K_ROTR(x, 34), S5K_ROTR(x, 39))
+#define S5K_BSIG1(x) S5K_XOR3(S5K_ROTR(x, 14), S5K_ROTR(x, 18), S5K_ROTR(x, 41))
+#define S5K_SSIG0(x) S5K_XOR3(S5K_ROTR(x,  1), S5K_ROTR(x,  8), S5K_SHR(x, 7))
+#define S5K_SSIG1(x) S5K_XOR3(S5K_ROTR(x, 19), S5K_ROTR(x, 61), S5K_SHR(x, 6))
 
 /*
  * SVE hooks, each defaulting to the code already here, so a fixed-width ISA
@@ -58,6 +64,9 @@
 #  define S5K_FOR8(BODY)     for (int j = 0; j < 8; j++) { BODY(j) }
 #  define S5K_FOR8K(BODY, k) for (int j = 0; j < 8; j++) { BODY(k, j) }
 #  define S5K_FOLDN S5K_LANES
+   /* See the MD5 template: eighty round constants, same addressing question. */
+#  define S5K_TDECL
+#  define S5K_TC(t) S5K_SET1(SHA512_K[t])
 #endif
 
 #ifndef S5K_WDECL
@@ -70,7 +79,7 @@
     {                                                                     \
         S5K_VEC t1 = S5K_ADD(S5K_V(H,k), S5K_BSIG1(S5K_V(E,k)));                      \
         t1 = S5K_ADD(t1, S5K_F_CH(S5K_V(E,k), S5K_V(F,k), S5K_V(G,k)));                     \
-        t1 = S5K_ADD(t1, S5K_SET1(SHA512_K[t]));                          \
+        t1 = S5K_ADD(t1, S5K_TC(t));                                      \
         t1 = S5K_ADD(t1, S5K_WGET(k, (t) & 15));                                 \
         S5K_VEC t2 = S5K_ADD(S5K_BSIG0(S5K_V(A,k)),\
                              S5K_F_MAJ(S5K_V(A,k), S5K_V(B,k), S5K_V(C,k))); \
@@ -188,6 +197,7 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
         S5K_V(E,k) = S5K_V2(h,k,4); S5K_V(F,k) = S5K_V2(h,k,5);           \
         S5K_V(G,k) = S5K_V2(h,k,6); S5K_V(H,k) = S5K_V2(h,k,7);
         S5K_FOREACH(S5K_START_BLOCK)
+        S5K_TDECL
 #undef S5K_START_BLOCK
 
 
@@ -246,9 +256,12 @@ void S5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 #undef S5K_FOR8
 #undef S5K_FOR8K
 #undef S5K_FOLDN
+#undef S5K_TDECL
+#undef S5K_TC
 #undef S5K_WDECL
 #undef S5K_WGET
 #undef S5K_WSET
+#undef S5K_XOR3
 #undef S5K_BSIG0
 #undef S5K_BSIG1
 #undef S5K_SSIG0

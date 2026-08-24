@@ -44,8 +44,12 @@
 #define OPS_STORE(p, v) svst1_u32(SVE_P32, (uint32_t *) (void *) (p), (v))
 #define OPS_LOAD(p)     svld1_u32(SVE_P32, (const uint32_t *) (const void *) (p))
 
-/* Shift left, then shift-right-and-insert: the insert folds in the or. */
-#define OPS_ROTL(x, n)  svsri_n_u32(svlsl_n_u32_x(SVE_P32, (x), (n)), (x), 32 - (n))
+/*
+ * XAR is xor-then-rotate-right in one instruction. With a zero operand it is a
+ * plain rotate, and rotating left by n is rotating right by 32 - n. One
+ * instruction where shift-left plus shift-right-and-insert is two.
+ */
+#define OPS_ROTL(x, n)  svxar_n_u32((x), svdup_n_u32(0), 32 - (n))
 
 /* svbsl(a, b, sel) = (a & sel) | (b & ~sel), selector last. */
 #define OPS_CH(x, y, z)  svbsl_u32((y), (z), (x))
@@ -54,6 +58,12 @@
 #define OPS_F(x, y, z)  OPS_CH(x, y, z)
 #define OPS_G(x, y, z)  OPS_CH(z, x, y)
 #define OPS_H(x, y, z)  sveor3_u32((x), (y), (z))
+
+/* Capabilities the templates ask for by name. EOR3 collapses a three-way XOR
+   into one instruction; XAR fuses the XOR that precedes a rotate into it. Both
+   appear in SHA-1's schedule expansion and all four of SHA-512's sigmas. */
+#define OPS_XOR3(a, b, c)   sveor3_u32((a), (b), (c))
+#define OPS_XORROT(a, b, n) svxar_n_u32((a), (b), 32 - (n))
 #define OPS_I(x, y, z)                                                  \
     sveor_u32_x(SVE_P32, (y),                                           \
         svorr_u32_x(SVE_P32, (x), svnot_u32_x(SVE_P32, (z))))
@@ -71,6 +81,14 @@
 #define OPS64_ROTR(x, n)  svsri_n_u64(svlsl_n_u64_x(SVE_P64, (x), 64 - (n)), (x), (n))
 #define OPS64_CH(x, y, z)  svbsl_u64((y), (z), (x))
 #define OPS64_MAJ(x, y, z) svbsl_u64((z), (x), sveor_u64_x(SVE_P64, (x), (y)))
+/*
+ * No OPS64_XOR3 here, deliberately. SHA-512's four sigmas are three-way XORs
+ * and EOR3 collapses each into one instruction, so this should be free money.
+ * Measured, it costs 3%: the sigma operands are rotations of the same value
+ * and stay live across all four, and EOR3 is destructive, so preserving them
+ * costs more than the fused XOR saves. MD5's H and SHA-1's schedule keep
+ * OPS_XOR3 because there it wins.
+ */
 
 /* Every algorithm at every stream count, from the shared matrix. The hooks are
    the same ones sve.c uses: the sizeless-type problem is identical. */

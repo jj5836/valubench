@@ -27,6 +27,16 @@
 #define S1K_ROTL   OPS_ROTL
 #define S1K_STORE  OPS_STORE
 #define S1K_LOAD   OPS_LOAD
+
+/* Optional ISA capabilities. An ISA that has a three-way XOR, or an
+   xor-fused-with-rotate, says so; the template falls back to composing them
+   from two-input operations when it does not. */
+#ifdef OPS_XOR3
+#  define S1K_XOR3 OPS_XOR3
+#endif
+#ifdef OPS_XORROT
+#  define S1K_XORROT OPS_XORROT
+#endif
 #define S1K_F_CH   OPS_CH
 #define S1K_F_MAJ  OPS_MAJ
 

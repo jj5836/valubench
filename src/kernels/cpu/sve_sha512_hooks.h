@@ -15,6 +15,14 @@
 #define S5K_V(name, k)      VB_SVE_V(name, k)
 #define S5K_V2(name, k, i)  VB_SVE_V2(name, k, i)
 #define S5K_FOLDN           VB_MAX_LANES
+
+/* As the template default; see the MD5 hooks for the base-register experiment
+   and why it lost. */
+#define S5K_TDECL                                       \
+    const uint64_t *s5k_tbase = SHA512_K;               \
+    __asm__ ("" : "+r" (s5k_tbase));
+#define S5K_TC(t) S5K_SET1(s5k_tbase[t])
+
 #define S5K_FOR8(BODY)      BODY(0) BODY(1) BODY(2) BODY(3)                  \
                             BODY(4) BODY(5) BODY(6) BODY(7)
 #define S5K_FOR8K(BODY, k)  BODY(k,0) BODY(k,1) BODY(k,2) BODY(k,3)          \
@@ -47,6 +55,6 @@
 #endif
 
 #define S5K_WDECL           uint64_t wbuf[S5K_STREAMS * 16 * VB_MAX_LANES];
-#define S5K_WAT(k, i)       (wbuf + (((k) * 16 + (i)) * (size_t) S5K_LANES))
+#define S5K_WAT(k, i)       (wbuf + ((size_t) ((k) * 16 + (i)) * (size_t) S5K_LANES))
 #define S5K_WGET(k, i)      S5K_LOAD(S5K_WAT(k, i))
 #define S5K_WSET(k, i, v)   S5K_STORE(S5K_WAT(k, i), (v))

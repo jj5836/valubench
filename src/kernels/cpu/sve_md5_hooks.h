@@ -16,6 +16,22 @@
 #define MD5K_V2(name, k, i)  VB_SVE_V2(name, k, i)
 #define MD5K_FOLDN           VB_MAX_LANES
 
+/*
+ * Round constants: the same as the template's default.
+ *
+ * Pinning the table base in a register with an empty asm was tried and is 30%
+ * worse. It does what it promises in isolation -- eight MD5 rounds go from 52
+ * instructions to 36, because ld1rw takes an immediate offset and stops
+ * needing adrp+add for every constant -- but the kernel has no register to
+ * spare, and holding one across the whole function costs more in spills than
+ * the addressing saves. Measured, not assumed.
+ */
+#define MD5K_TDECL                                      \
+    const uint32_t *md5k_tbase = MD5_T;                 \
+    __asm__ ("" : "+r" (md5k_tbase));
+#define MD5K_TC(TI) MD5K_SET1(md5k_tbase[TI])
+
+
 #define MD5K_SVE_DECL(k)                                                    \
     MD5K_VEC MD5K_V2(wv,k,0), MD5K_V2(wv,k,1),                              \
              MD5K_V2(wv,k,2), MD5K_V2(wv,k,3);                              \

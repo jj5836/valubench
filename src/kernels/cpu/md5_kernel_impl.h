@@ -117,6 +117,16 @@ static const uint32_t MD5_T[64] = {
 #  define MD5K_FOREACH(BODY) \
        for (unsigned k = 0; k < MD5K_STREAMS; k++) { BODY(k) }
 #  define MD5K_FOLDN MD5K_LANES
+   /*
+    * The round constant, and where its address comes from.
+    *
+    * Defaults to indexing the table directly, which is what every fixed-width
+    * ISA has always compiled. An ISA whose broadcast-from-memory takes an
+    * immediate offset wants a base register held across the whole function
+    * instead, and says so by overriding these two.
+    */
+#  define MD5K_TDECL
+#  define MD5K_TC(TI) MD5K_SET1(MD5_T[TI])
 #endif
 
 /*
@@ -137,7 +147,7 @@ static const uint32_t MD5_T[64] = {
     MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k),                                      \
                            F(MD5K_V(B,k), MD5K_V(C,k), MD5K_V(D,k)));        \
     MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_W(k, WI));                      \
-    MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_SET1(MD5_T[TI]));               \
+    MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_TC(TI));                        \
     MD5K_V(A,k) = MD5K_ROTL(MD5K_V(A,k), SH);                                \
     MD5K_V(A,k) = MD5K_ADD(MD5K_V(A,k), MD5K_V(B,k));
 
@@ -249,6 +259,7 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
         MD5K_V(C,k) = MD5K_V(h2,k);                                       \
         MD5K_V(D,k) = MD5K_V(h3,k);
         MD5K_FOREACH(MD5K_START_BLOCK)
+        MD5K_TDECL
 #undef MD5K_START_BLOCK
 
     /* ---- round 1 ---- */
@@ -387,6 +398,8 @@ void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
 #undef MD5K_SDECL_ALL
 #undef MD5K_FOREACH
 #undef MD5K_FOLDN
+#undef MD5K_TDECL
+#undef MD5K_TC
 #undef MD5K_W
 #undef MD5K_STEP1
 #undef MD5K_STEP

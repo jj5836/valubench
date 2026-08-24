@@ -32,6 +32,16 @@
 #define MD5K_ROTL   OPS_ROTL
 #define MD5K_STORE  OPS_STORE
 #define MD5K_LOAD   OPS_LOAD
+
+/* Optional ISA capabilities. An ISA that has a three-way XOR, or an
+   xor-fused-with-rotate, says so; the template falls back to composing them
+   from two-input operations when it does not. */
+#ifdef OPS_XOR3
+#  define MD5K_XOR3 OPS_XOR3
+#endif
+#ifdef OPS_XORROT
+#  define MD5K_XORROT OPS_XORROT
+#endif
 #define MD5K_F      OPS_F
 #define MD5K_G      OPS_G
 #define MD5K_H      OPS_H
