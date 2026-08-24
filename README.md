@@ -21,6 +21,60 @@ GPU and energy support need a few more packages — see
 [docs/dependencies.md](docs/dependencies.md), which has copy-paste blocks for fresh
 Ubuntu/Debian and RHEL/Fedora/Amazon Linux cloud instances.
 
+## What it is for
+
+**Deciding things about hardware you are considering, or hardware you already
+have, when the answer depends on integer vector work.** Floating-point
+benchmarks are abundant and say nothing about the integer path; this measures
+that path and where it stops being the constraint.
+
+Four questions it answers with numbers rather than reasoning:
+
+- **What is a wider vector unit worth here?** Not in theory — measured, rung by
+  rung, from scalar to AVX-512 or NEON. Doubling the register width is worth
+  1.93x on one core and 1.06x on another, because the second cracks every
+  256-bit operation into halves. Same source, same instructions.
+- **Is a dedicated accelerator worth using?** A CPU's fixed-function SHA unit
+  has measured anywhere from 2.13x *faster* than the vector path beside it to
+  0.25x as fast — an 8.5x spread across three cores. Which one you have decides
+  whether using it is a win or a 75% loss.
+- **When does offloading to a GPU pay?** Two separate numbers, because they
+  disagree: N\* is where compute overtakes the PCIe transfer, and break-even is
+  where the accelerator beats the whole host CPU. On an A10 those were 139 and
+  42 iterations, so there is a wide band where the bus binds and offloading is
+  still right.
+- **Where does the memory system take over?** A fast enough kernel outruns DRAM
+  on the same data a narrower one does not — AVX-512 losing 44% past the
+  last-level cache while AVX2 loses 3%, and burning 62% *more* power to do it.
+
+**And it answers them about the machine in front of you**, which is the point.
+Every figure above came from running this on a specific part; none of them
+generalise, and several reverse between machines. That is the case for measuring.
+
+## Why it exists
+
+Because the numbers people quote about integer SIMD are usually inherited rather
+than measured, and they do not survive contact with a second machine. Every
+conclusion in this project's own history that was drawn from one part has since
+been overturned by the next one.
+
+So the design is built around not fooling yourself:
+
+- **Correctness is a gate, not a footnote.** Every run verifies its digests
+  against an independent scalar reference and reduces them to a fingerprint that
+  is invariant across lanes, streams, threads, devices and instruction sets. The
+  same value comes back from Gracemont, Cascade Lake, Zen 5, Ice Lake, Sapphire
+  Rapids, Neoverse V1, an Intel iGPU, an A10 and two H100s. A run that cannot
+  verify produces no number.
+- **Dispersion is reported, and a noisy result says so** — in the output and in
+  the exit code.
+- **The environment is captured** with every result: CPU, ISA path actually
+  taken, governor, clock, compiler, thread count, device and driver. A number
+  without its machine is not comparable to anything, and two compiler releases
+  alone moved single-thread throughput by −15% to +8% on identical silicon.
+- **One binary, runtime dispatch, no `-march=native`.** The build cannot depend
+  on the machine that produced it.
+
 ## Algorithms
 
 Three, selected with `--algorithm`:
@@ -122,19 +176,21 @@ came from. They are not a results database — this project deliberately does no
 ship one, because a number without its machine, compiler and workload is not
 comparable to anything. MD5, one thread:
 
-| | AMD EPYC 9R45 (Zen 5) | Intel Xeon 4210 | Intel N100 |
-|---|---:|---:|---:|
-| best kernel | `avx512-s4` | `avx512-s2` | `avx2-s2` |
-| MH/s | **344** | 178 | 43 |
+| | EPYC 9R45 (Zen 5) | Xeon 8488C (SPR) | Xeon 4210 (CLX) | N100 (Gracemont) | Graviton3 |
+|---|---:|---:|---:|---:|---:|
+| best kernel | `avx512-s4` | `avx512-s4` | `avx512-s2` | `avx2-s4` | `neon-s4` |
+| MH/s | **344** | 269 | 178 | 55 | 46 |
 
-*gcc 13.3 / 15.2 / 13.3, August 2026, 55-byte messages.*
+*One thread, 55-byte messages, gcc 13.3 except Xeon 4210 (15.2). August 2026.*
 
-Two findings from those runs give the flavour of what the tool is for. AVX-512
-is worth **2.72x** over AVX2 on a full-width datapath but only **2.20x** where
-the issue ports are shared. And the dedicated SHA-NI unit is **2.13x** faster
-than the vector path on one core and **0.46x** as fast on another — the same
-instructions, opposite conclusions, which is the case against assuming rather
-than measuring.
+Three findings from those runs give the flavour of what the tool is for.
+AVX-512 is worth **2.72x** over AVX2 on a full-width AMD datapath but **2.20x
+to 2.33x** on three Intel server generations where the issue ports fuse. The
+dedicated SHA-NI unit ranges from **2.13x faster** than the vector path beside
+it to **0.25x as fast** — an 8.5x spread on the same instructions. And on a
+discrete GPU, offloading beats the entire 30-core host from **42 iterations**
+while the PCIe link keeps binding until **139** — two numbers that answer
+different questions and order the opposite way to intuition.
 
 ## Documentation
 
@@ -149,27 +205,33 @@ than measuring.
 
 ## Status
 
-Working and verified on x86-64: scalar, SSE2, AVX2, AVX-512 and SHA-NI CPU
-kernels, OpenCL device kernels for all three algorithms, resident and streaming
-transfer, autotune, statistics, energy where counters allow, JSON and human
-output. GCC 13.3 and Clang 18.1.3 both build clean under the full warning set,
-pass the suite, and produce identical checksums.
+**Validated on four CPU architectures and three GPUs**, all producing the same
+verification fingerprints: Gracemont, Cascade Lake, Zen 5, Ice Lake-SP,
+Sapphire Rapids, Neoverse V1 (NEON), an Intel iGPU, an NVIDIA A10 and two H100s.
+Scalar, SSE2, AVX2, AVX-512, SHA-NI and NEON CPU kernels; OpenCL device kernels
+for all three algorithms; resident and streaming transfer; multi-device;
+autotune; statistics; energy where counters allow; JSON and human output. GCC
+13.3 and Clang 18.1.3 both build clean under the full warning set and produce
+identical checksums, and CI additionally cross-compiles for AArch64 and runs the
+NEON kernels under emulation.
 
 Known gaps, in the order they matter:
 
-- **Device validation is Intel-only.** The OpenCL path has run on an Intel iGPU
-  and nowhere else. An integrated part has no PCIe link, so the crossover
-  machinery works but has never produced a number that carries a purchasing
-  decision. AMD and NVIDIA GPUs are untested.
-- **No bare-metal run yet.** Both AVX-512 hosts so far were virtual machines
-  with no `cpufreq` and no RAPL, so licence downclocking and energy per hash are
-  unmeasured.
+- **SVE and SVE2 have no kernel.** Neoverse V1 offers SVE at 256 bits and the
+  NEON measurement leaves roughly half the issue capacity idle, so this is the
+  largest unclaimed number. It needs a vector-length-agnostic kernel, which does
+  not fit the fixed-width template the other ISAs share.
+- **AMD GPUs are untested.** NVIDIA and Intel are validated; ROCm and Mesa
+  Rusticl have never run this.
+- **Every transfer figure is pageable memory.** An A10 sustained 10.9 GB/s over
+  PCIe 4.0 x16, roughly half what pinned staging would achieve, which moves the
+  crossover by about that factor.
 - **Overlapped transfer and compute.** Streaming uploads then launches, in
   order. The reported ratio already answers the pipelined question, so this
   concerns achieved throughput rather than correctness of the ratio.
-- **SVE and SVE2 have no kernel.** NEON is written, validated and
-  measured on Graviton3; the 256-bit SVE the same part offers
-  is unused, and the NEON figures suggest there is headroom above them.
+- **Nothing pins the toolchain.** Two GCC releases moved single-thread
+  throughput by −15% to +8% on identical silicon, so results are comparable
+  within a compiler and not across one.
 
 ## Layout
 
