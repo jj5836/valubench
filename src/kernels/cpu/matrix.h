@@ -49,23 +49,29 @@
 /*
  * Every visitor macro M is called as:
  *
- *   M(alg, isa, streams, isa_display_name, algorithm_id, available_fn, lanes)
+ *   M(alg, isa, streams, isa_display_name, algorithm_id, available_fn,
+ *     lanes, lanes_fn)
  *
  * `lanes` is per (isa, algorithm) because a register holds half as many 64-bit
  * messages as 32-bit ones -- SHA-512 gets the narrow count.
+ *
+ * `lanes_fn` is NULL for every fixed-width ISA. A vector-length-agnostic ISA
+ * does not know its lane count until it runs, so it leaves `lanes` at 0 and
+ * names a function instead; src/registry.c calls it once and writes the answer
+ * into the row before anything reads it.
  */
 
-#define VB_FOR_STREAMS(M, alg, isa, isaname, algid, avail, lanes) \
-    M(alg, isa, 1, isaname, algid, avail, lanes)                  \
-    M(alg, isa, 2, isaname, algid, avail, lanes)                  \
-    M(alg, isa, 3, isaname, algid, avail, lanes)                  \
-    M(alg, isa, 4, isaname, algid, avail, lanes)
+#define VB_FOR_STREAMS(M, alg, isa, isaname, algid, avail, lanes, lfn) \
+    M(alg, isa, 1, isaname, algid, avail, lanes, lfn)                  \
+    M(alg, isa, 2, isaname, algid, avail, lanes, lfn)                  \
+    M(alg, isa, 3, isaname, algid, avail, lanes, lfn)                  \
+    M(alg, isa, 4, isaname, algid, avail, lanes, lfn)
 
 /* Add an algorithm here and in instantiate_all.h; nothing else changes. */
-#define VB_FOR_ALGS(M, isa, isaname, avail, l32, l64)                  \
-    VB_FOR_STREAMS(M, md5,    isa, isaname, VB_ALG_MD5,    avail, l32) \
-    VB_FOR_STREAMS(M, sha1,   isa, isaname, VB_ALG_SHA1,   avail, l32) \
-    VB_FOR_STREAMS(M, sha512, isa, isaname, VB_ALG_SHA512, avail, l64)
+#define VB_FOR_ALGS(M, isa, isaname, avail, l32, l64, f32, f64)             \
+    VB_FOR_STREAMS(M, md5,    isa, isaname, VB_ALG_MD5,    avail, l32, f32) \
+    VB_FOR_STREAMS(M, sha1,   isa, isaname, VB_ALG_SHA1,   avail, l32, f32) \
+    VB_FOR_STREAMS(M, sha512, isa, isaname, VB_ALG_SHA512, avail, l64, f64)
 
 /*
  * One block per ISA. The guards are here rather than inside a visitor because
@@ -75,23 +81,23 @@
  * Columns: ISA token, display name, availability predicate, 32-bit lanes,
  * 64-bit lanes.
  */
-#define VB_ISA_SCALAR(M) VB_FOR_ALGS(M, scalar, "scalar", always, 1, 1)
+#define VB_ISA_SCALAR(M) VB_FOR_ALGS(M, scalar, "scalar", always, 1, 1, NULL, NULL)
 
 #if VB_HAVE_SSE2
-#  define VB_ISA_SSE2(M) VB_FOR_ALGS(M, sse2, "SSE2", vb_cpu_has_sse2, 4, 2)
+#  define VB_ISA_SSE2(M) VB_FOR_ALGS(M, sse2, "SSE2", vb_cpu_has_sse2, 4, 2, NULL, NULL)
 #else
 #  define VB_ISA_SSE2(M)
 #endif
 
 #if VB_HAVE_AVX2
-#  define VB_ISA_AVX2(M) VB_FOR_ALGS(M, avx2, "AVX2", vb_cpu_has_avx2, 8, 4)
+#  define VB_ISA_AVX2(M) VB_FOR_ALGS(M, avx2, "AVX2", vb_cpu_has_avx2, 8, 4, NULL, NULL)
 #else
 #  define VB_ISA_AVX2(M)
 #endif
 
 #if VB_HAVE_AVX512
 #  define VB_ISA_AVX512(M) \
-       VB_FOR_ALGS(M, avx512, "AVX512", vb_cpu_has_avx512f, 16, 8)
+       VB_FOR_ALGS(M, avx512, "AVX512", vb_cpu_has_avx512f, 16, 8, NULL, NULL)
 #else
 #  define VB_ISA_AVX512(M)
 #endif
@@ -104,7 +110,7 @@
  */
 #if VB_HAVE_SHANI
 #  define VB_ISA_SHANI(M) \
-       VB_FOR_STREAMS(M, sha1, shani, "SHA-NI", VB_ALG_SHA1, vb_cpu_has_sha_ni, 1)
+       VB_FOR_STREAMS(M, sha1, shani, "SHA-NI", VB_ALG_SHA1, vb_cpu_has_sha_ni, 1, NULL)
 #else
 #  define VB_ISA_SHANI(M)
 #endif
@@ -116,7 +122,7 @@
  * defined on targets where the build probed it successfully.
  */
 #if VB_HAVE_NEON
-#  define VB_ISA_NEON(M) VB_FOR_ALGS(M, neon, "NEON", vb_cpu_has_neon, 4, 2)
+#  define VB_ISA_NEON(M) VB_FOR_ALGS(M, neon, "NEON", vb_cpu_has_neon, 4, 2, NULL, NULL)
 #else
 #  define VB_ISA_NEON(M)
 #endif

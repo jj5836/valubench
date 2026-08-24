@@ -22,6 +22,7 @@
 #include "opencl.h"
 #include "kernels/cpu/matrix.h"
 
+#include <pthread.h>
 #include <stddef.h>
 
 static int always(void) { return 1; }
@@ -42,7 +43,7 @@ static int have_opencl(void)
 
 /* ---- forward declarations, one per matrix cell -------------------------- */
 
-#define VB_DECL_KERNEL(alg, isa, st, isaname, algid, avail, lanes)          \
+#define VB_DECL_KERNEL(alg, isa, st, isaname, algid, avail, lanes, lfn)     \
     void VB_KSYM(alg, isa, st)(const void *corpus, uint64_t n_groups,       \
                                uint32_t blocks, uint32_t iterations,        \
                                uint64_t checksum[VB_MAX_DIGEST_WORDS]);
@@ -51,11 +52,15 @@ VB_FOR_EACH_KERNEL(VB_DECL_KERNEL)
 
 /* ---- the table ---------------------------------------------------------- */
 
-#define VB_ROW_KERNEL(alg, isa, st, isaname, algid, avail, lanes)           \
+#define VB_ROW_KERNEL(alg, isa, st, isaname, algid, avail, lanes, lfn)      \
     { VB_KNAME(alg, isa, st), isaname, algid, lanes, st,                    \
       VB_KSYM(alg, isa, st), avail, 0 },
 
-static const vb_kernel kernels[] = {
+/*
+ * Not const, because of the SVE rows below. Everything else about this table
+ * is fixed at compile time.
+ */
+static vb_kernel kernels[] = {
     VB_FOR_EACH_KERNEL(VB_ROW_KERNEL)
 
     /*
@@ -77,8 +82,40 @@ static const vb_kernel kernels[] = {
 #undef VB_DEV_ROW
 };
 
+/*
+ * Lane counts that are only known at run time.
+ *
+ * A vector-length-agnostic ISA registers `lanes = 0` and a function here; every
+ * fixed-width row has NULL and is untouched. The table is filled in once, on
+ * the first call to vb_kernels(), so that by the time anything reads
+ * `k->lanes` it is correct -- which means no caller changes, and there are
+ * about a dozen of them.
+ *
+ * This assumes the vector length is fixed for the life of the process. It is,
+ * unless something calls prctl(PR_SVE_SET_VL), which nothing here does; a
+ * per-thread vector length would break this and much else besides.
+ */
+#define VB_LANES_FN(alg, isa, st, isaname, algid, avail, lanes, lfn) lfn,
+
+static unsigned (*const lanes_fn[])(void) = {
+    VB_FOR_EACH_KERNEL(VB_LANES_FN)
+};
+
+#undef VB_LANES_FN
+
+static void resolve_lanes(void)
+{
+    size_t n = sizeof lanes_fn / sizeof lanes_fn[0];
+    for (size_t i = 0; i < n; i++)
+        if (lanes_fn[i])
+            kernels[i].lanes = lanes_fn[i]();
+}
+
 const vb_kernel *vb_kernels(size_t *count)
 {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, resolve_lanes);
+
     *count = sizeof kernels / sizeof kernels[0];
     return kernels;
 }
