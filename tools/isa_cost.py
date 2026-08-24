@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
-"""Instructions per message, from the generated code, before renting anything.
+"""Instructions per message, from the generated code.
 
 Static and deterministic, so it costs nothing and cannot be perturbed by load.
-It predicts relative throughput only to the extent that these kernels are
-issue-bound rather than latency- or memory-bound, which is why the prediction
-it produces is worth writing down *before* the hardware run rather than after.
+
+DO NOT READ THIS AS A THROUGHPUT PREDICTION. It was used as one, and it was
+wrong on both ARM parts:
+
+  Graviton3, SVE-256 vs NEON-128   predicted 1.33x-1.68x   measured 0.52x-1.17x
+  Graviton4, SVE2-128 vs NEON-128  predicted 0.91x-1.03x   measured 0.32x-0.91x
+
+Two reasons, both measured on Graviton4 with perf. First, SVE code retires
+about half the instructions per cycle that NEON does -- 1.56 against 3.18 --
+at one micro-op per instruction either way, so it is an issue-rate limit that
+no instruction count can see. Second, comparing each ISA at *its own* best
+stream count compares the wrong pairs: the stream count that minimises
+instructions is not the one that maximises throughput.
+
+Throughput ratio decomposes as (instruction ratio) x (IPC ratio), and this tool
+supplies only the first. On Graviton4 that product came within 2% of measured.
+So: use this to understand where instructions go, and to compare an ISA against
+itself across a change. To predict throughput, measure IPC too.
 
 A kernel body processes one group of (lanes x streams) messages, so
 instructions per message is body / (lanes x streams). For a vector-length
@@ -80,14 +95,15 @@ for alg, w in (("md5", 32), ("sha1", 32), ("sha512", 64)):
         per[isa] = row
         print("    %-10s %-22s %s" % (isa, label,
               " ".join("%9.1f" % v if v else "        -" for v in row)))
-    if "neon" in per and "sve" in per:
-        best_n = min(v for v in per["neon"] if v)
-        best_s = min(v for v in per["sve"] if v)
-        print("    -> SVE-256 vs NEON-128, best stream count each: %.2fx"
-              % (best_n / best_s))
-    if "neon" in per and "sve2" in per:
-        best_n = min(v for v in per["neon"] if v)
-        best_2 = min(v for v in per["sve2"] if v)
-        print("    -> SVE2-128 vs NEON-128, same width:            %.2fx"
-              % (best_n / best_2))
+    # Matched stream counts only. Comparing each ISA at its own cheapest
+    # stream count pairs configurations that no run would ever choose.
+    for other, label in (("sve", "SVE  vs NEON"), ("sve2", "SVE2 vs NEON")):
+        if "neon" not in per or other not in per:
+            continue
+        cells = []
+        for st in range(4):
+            a, b = per["neon"][st], per[other][st]
+            cells.append("s%d %.2fx" % (st + 1, a / b) if a and b else "s%d   -" % (st + 1))
+        print("    %s, instructions only: %s" % (label, "  ".join(cells)))
+    print("    (instructions only -- multiply by the IPC ratio for throughput)")
     print()
