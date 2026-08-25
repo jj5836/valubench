@@ -45,6 +45,14 @@
 #define MD5K_STREAMS 4
 #include "instantiate_md5.h"
 
+#define MD5K_NAME    VB_KSYM(md5, VB_ISA, 6)
+#define MD5K_STREAMS 6
+#include "instantiate_md5.h"
+
+#define MD5K_NAME    VB_KSYM(md5, VB_ISA, 8)
+#define MD5K_STREAMS 8
+#include "instantiate_md5.h"
+
 /* ---- SHA-1 -------------------------------------------------------------- */
 
 #define S1K_NAME    VB_KSYM(sha1, VB_ISA, 1)
@@ -63,6 +71,14 @@
 #define S1K_STREAMS 4
 #include "instantiate_sha1.h"
 
+#define S1K_NAME    VB_KSYM(sha1, VB_ISA, 6)
+#define S1K_STREAMS 6
+#include "instantiate_sha1.h"
+
+#define S1K_NAME    VB_KSYM(sha1, VB_ISA, 8)
+#define S1K_STREAMS 8
+#include "instantiate_sha1.h"
+
 /* ---- SHA-512 (64-bit operation set) ------------------------------------- */
 
 #define S5K_NAME    VB_KSYM(sha512, VB_ISA, 1)
@@ -79,4 +95,12 @@
 
 #define S5K_NAME    VB_KSYM(sha512, VB_ISA, 4)
 #define S5K_STREAMS 4
+#include "instantiate_sha512.h"
+
+#define S5K_NAME    VB_KSYM(sha512, VB_ISA, 6)
+#define S5K_STREAMS 6
+#include "instantiate_sha512.h"
+
+#define S5K_NAME    VB_KSYM(sha512, VB_ISA, 8)
+#define S5K_STREAMS 8
 #include "instantiate_sha512.h"

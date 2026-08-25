@@ -65,6 +65,16 @@
     M(alg, isa, 1, isaname, algid, avail, lanes, lfn)                  \
     M(alg, isa, 2, isaname, algid, avail, lanes, lfn)                  \
     M(alg, isa, 3, isaname, algid, avail, lanes, lfn)                  \
+    M(alg, isa, 4, isaname, algid, avail, lanes, lfn)                  \
+    M(alg, isa, 6, isaname, algid, avail, lanes, lfn)                  \
+    M(alg, isa, 8, isaname, algid, avail, lanes, lfn)
+
+/* SHA-NI is a fixed-function unit with its own template, which implements one
+   to four streams and is not part of the stream-count question. */
+#define VB_FOR_STREAMS4(M, alg, isa, isaname, algid, avail, lanes, lfn) \
+    M(alg, isa, 1, isaname, algid, avail, lanes, lfn)                   \
+    M(alg, isa, 2, isaname, algid, avail, lanes, lfn)                   \
+    M(alg, isa, 3, isaname, algid, avail, lanes, lfn)                   \
     M(alg, isa, 4, isaname, algid, avail, lanes, lfn)
 
 /* Add an algorithm here and in instantiate_all.h; nothing else changes. */
@@ -110,7 +120,7 @@
  */
 #if VB_HAVE_SHANI
 #  define VB_ISA_SHANI(M) \
-       VB_FOR_STREAMS(M, sha1, shani, "SHA-NI", VB_ALG_SHA1, vb_cpu_has_sha_ni, 1, NULL)
+       VB_FOR_STREAMS4(M, sha1, shani, "SHA-NI", VB_ALG_SHA1, vb_cpu_has_sha_ni, 1, NULL)
 #else
 #  define VB_ISA_SHANI(M)
 #endif

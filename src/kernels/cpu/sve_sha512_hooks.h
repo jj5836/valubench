@@ -41,17 +41,40 @@
 
 #if S5K_STREAMS == 1
 #  define S5K_FOREACH(BODY) BODY(0)
-#  define S5K_SDECL_ALL         S5K_SVE_DECL(0)
+#  define S5K_SDECL_ALL S5K_SVE_DECL(0)
 #elif S5K_STREAMS == 2
 #  define S5K_FOREACH(BODY) BODY(0) BODY(1)
-#  define S5K_SDECL_ALL         S5K_SVE_DECL(0) S5K_SVE_DECL(1)
+#  define S5K_SDECL_ALL S5K_SVE_DECL(0) \
+                        S5K_SVE_DECL(1)
 #elif S5K_STREAMS == 3
 #  define S5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2)
-#  define S5K_SDECL_ALL         S5K_SVE_DECL(0) S5K_SVE_DECL(1) S5K_SVE_DECL(2)
+#  define S5K_SDECL_ALL S5K_SVE_DECL(0) \
+                        S5K_SVE_DECL(1) \
+                        S5K_SVE_DECL(2)
 #elif S5K_STREAMS == 4
 #  define S5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2) BODY(3)
-#  define S5K_SDECL_ALL         S5K_SVE_DECL(0) S5K_SVE_DECL(1)                  \
-                            S5K_SVE_DECL(2) S5K_SVE_DECL(3)
+#  define S5K_SDECL_ALL S5K_SVE_DECL(0) \
+                        S5K_SVE_DECL(1) \
+                        S5K_SVE_DECL(2) \
+                        S5K_SVE_DECL(3)
+#elif S5K_STREAMS == 6
+#  define S5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2) BODY(3) BODY(4) BODY(5)
+#  define S5K_SDECL_ALL S5K_SVE_DECL(0) \
+                        S5K_SVE_DECL(1) \
+                        S5K_SVE_DECL(2) \
+                        S5K_SVE_DECL(3) \
+                        S5K_SVE_DECL(4) \
+                        S5K_SVE_DECL(5)
+#elif S5K_STREAMS == 8
+#  define S5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2) BODY(3) BODY(4) BODY(5) BODY(6) BODY(7)
+#  define S5K_SDECL_ALL S5K_SVE_DECL(0) \
+                        S5K_SVE_DECL(1) \
+                        S5K_SVE_DECL(2) \
+                        S5K_SVE_DECL(3) \
+                        S5K_SVE_DECL(4) \
+                        S5K_SVE_DECL(5) \
+                        S5K_SVE_DECL(6) \
+                        S5K_SVE_DECL(7)
 #endif
 
 #define S5K_WDECL           uint64_t wbuf[S5K_STREAMS * 16 * VB_MAX_LANES];

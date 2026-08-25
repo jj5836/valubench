@@ -373,7 +373,10 @@ check-kernels: $(BUILD)/test_kernels
 # is scalar rather than trusting KFLAGS_scalar to have been honoured. Uses the
 # toolchain's own objdump so it works under cross-compilation, and skips itself
 # if there is none.
-OBJDUMP ?= $(shell echo $(CC) | sed 's/g\?cc$$/objdump/;s/clang/objdump/')
+# Strip any -NN version suffix first: gcc-15 and clang-20 are ordinary
+# spellings and the old pattern matched neither, so OBJDUMP became the
+# compiler itself and the scalar-purity guard silently found no kernels.
+OBJDUMP ?= $(shell echo $(CC) | sed 's/-[0-9][0-9]*$$//; s/g\?cc$$/objdump/; s/clang/objdump/')
 
 check-scalar: $(BUILD)/kernel_scalar.o
 	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)

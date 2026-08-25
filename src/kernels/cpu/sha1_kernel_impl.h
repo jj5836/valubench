@@ -145,8 +145,12 @@ static const uint32_t SHA1_IV[5] = {
 #  define S1K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__)
 #elif S1K_STREAMS == 4
 #  define S1K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__)
+#elif S1K_STREAMS == 6
+#  define S1K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__)
+#elif S1K_STREAMS == 8
+#  define S1K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__)
 #else
-#  error "S1K_STREAMS must be 1..4"
+#  error "S1K_STREAMS must be 1, 2, 3, 4, 6 or 8"
 #endif
 
 #define S1K_STEP(F, KC, a, b, c, d, e, t) S1K_EACH(S1K_STEP1, F, KC, a, b, c, d, e, t)

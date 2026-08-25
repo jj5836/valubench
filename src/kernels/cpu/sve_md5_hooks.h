@@ -40,17 +40,40 @@
 
 #if MD5K_STREAMS == 1
 #  define MD5K_FOREACH(BODY) BODY(0)
-#  define MD5K_SDECL_ALL         MD5K_SVE_DECL(0)
+#  define MD5K_SDECL_ALL MD5K_SVE_DECL(0)
 #elif MD5K_STREAMS == 2
 #  define MD5K_FOREACH(BODY) BODY(0) BODY(1)
-#  define MD5K_SDECL_ALL         MD5K_SVE_DECL(0) MD5K_SVE_DECL(1)
+#  define MD5K_SDECL_ALL MD5K_SVE_DECL(0) \
+                        MD5K_SVE_DECL(1)
 #elif MD5K_STREAMS == 3
 #  define MD5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2)
-#  define MD5K_SDECL_ALL         MD5K_SVE_DECL(0) MD5K_SVE_DECL(1) MD5K_SVE_DECL(2)
+#  define MD5K_SDECL_ALL MD5K_SVE_DECL(0) \
+                        MD5K_SVE_DECL(1) \
+                        MD5K_SVE_DECL(2)
 #elif MD5K_STREAMS == 4
 #  define MD5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2) BODY(3)
-#  define MD5K_SDECL_ALL         MD5K_SVE_DECL(0) MD5K_SVE_DECL(1)               \
-                             MD5K_SVE_DECL(2) MD5K_SVE_DECL(3)
+#  define MD5K_SDECL_ALL MD5K_SVE_DECL(0) \
+                        MD5K_SVE_DECL(1) \
+                        MD5K_SVE_DECL(2) \
+                        MD5K_SVE_DECL(3)
+#elif MD5K_STREAMS == 6
+#  define MD5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2) BODY(3) BODY(4) BODY(5)
+#  define MD5K_SDECL_ALL MD5K_SVE_DECL(0) \
+                        MD5K_SVE_DECL(1) \
+                        MD5K_SVE_DECL(2) \
+                        MD5K_SVE_DECL(3) \
+                        MD5K_SVE_DECL(4) \
+                        MD5K_SVE_DECL(5)
+#elif MD5K_STREAMS == 8
+#  define MD5K_FOREACH(BODY) BODY(0) BODY(1) BODY(2) BODY(3) BODY(4) BODY(5) BODY(6) BODY(7)
+#  define MD5K_SDECL_ALL MD5K_SVE_DECL(0) \
+                        MD5K_SVE_DECL(1) \
+                        MD5K_SVE_DECL(2) \
+                        MD5K_SVE_DECL(3) \
+                        MD5K_SVE_DECL(4) \
+                        MD5K_SVE_DECL(5) \
+                        MD5K_SVE_DECL(6) \
+                        MD5K_SVE_DECL(7)
 #endif
 
 /* Word 0..3 live in named registers; 4..15 come from the corpus. A table,

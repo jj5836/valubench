@@ -110,8 +110,12 @@
 #  define S5K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__)
 #elif S5K_STREAMS == 4
 #  define S5K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__)
+#elif S5K_STREAMS == 6
+#  define S5K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__)
+#elif S5K_STREAMS == 8
+#  define S5K_EACH(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__)
 #else
-#  error "S5K_STREAMS must be 1..4"
+#  error "S5K_STREAMS must be 1, 2, 3, 4, 6 or 8"
 #endif
 
 #define S5K_STEP(t)   S5K_EACH(S5K_STEP1, t)

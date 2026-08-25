@@ -179,8 +179,28 @@ static const uint32_t MD5_T[64] = {
        MD5K_STEP1(2, F, A, B, C, D, WI, TI, SH)     \
        MD5K_STEP1(3, F, A, B, C, D, WI, TI, SH)     \
    } while (0)
+#elif MD5K_STREAMS == 6
+#  define MD5K_STEP(F, A, B, C, D, WI, TI, SH) do { \
+       MD5K_STEP1(0, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(1, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(2, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(3, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(4, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(5, F, A, B, C, D, WI, TI, SH)     \
+   } while (0)
+#elif MD5K_STREAMS == 8
+#  define MD5K_STEP(F, A, B, C, D, WI, TI, SH) do { \
+       MD5K_STEP1(0, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(1, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(2, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(3, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(4, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(5, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(6, F, A, B, C, D, WI, TI, SH)     \
+       MD5K_STEP1(7, F, A, B, C, D, WI, TI, SH)     \
+   } while (0)
 #else
-#  error "MD5K_STREAMS must be 1..4"
+#  error "MD5K_STREAMS must be 1, 2, 3, 4, 6 or 8"
 #endif
 
 void MD5K_NAME(const void *corpus_v, uint64_t n_groups, uint32_t blocks,
