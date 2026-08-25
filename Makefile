@@ -388,6 +388,15 @@ $(BUILD)/test_checkpoints: $(BUILD)/test_checkpoints.o $(BUILD)/workload.o \
 $(BUILD)/test_report_json: $(BUILD)/test_report_json.o $(CORE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(BUILD)/test_power_model: tests/test_power_model.c $(BUILD)/power.o
+	$(CC) $(CFLAGS) -o $@ $^ -pthread
+
+# Energy domains must be counted once each: an iGPU inside a package, a card
+# seen by two providers, two sockets, two cards. Constructed rather than
+# measured, because no one machine has all of these shapes.
+check-power: $(BUILD)/test_power_model
+	@$(BUILD)/test_power_model
+
 check-report: $(BUILD)/test_report_json
 	@$(BUILD)/test_report_json
 
@@ -430,6 +439,7 @@ check-working-set: $(BUILD)/valubench
 	@sh tests/check_working_set.sh $(BUILD)/valubench
 
 check: test check-kernels check-scalar check-checkpoints check-threadfail \
+       check-power \
        check-working-set \
        check-report check-contract
 

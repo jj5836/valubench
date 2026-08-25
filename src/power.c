@@ -210,7 +210,9 @@ static void scan_powercap(vb_power *p, int *denied)
             s->scope = VB_PWR_CPU_CORES;
             snprintf(s->name, sizeof s->name, "RAPL %s", name);
         } else if (strstr(name, "uncore")) {
+            /* The integrated GPU, and already inside the package figure. */
             s->scope = VB_PWR_GPU;
+            s->contained = 1;
             snprintf(s->name, sizeof s->name, "RAPL uncore (integrated GPU)");
         } else {
             s->scope = VB_PWR_OTHER;
@@ -264,6 +266,7 @@ static void scan_drm_hwmon(vb_power *p)
             s->kind = kind;
             s->fd = fd;
             s->scope = VB_PWR_GPU;
+            s->provider = VB_PWR_PROV_DRM;
             snprintf(s->name, sizeof s->name, "card%d %s%s", card,
                      hname[0] ? hname : "hwmon",
                      kind == SRC_HWMON_POWER ? " (avg power)" : "");
@@ -294,6 +297,7 @@ static void scan_nvml(vb_power *p)
 
         s->kind = SRC_NVML;
         s->scope = VB_PWR_GPU;
+        s->provider = VB_PWR_PROV_NVML;
         s->nvml_index = i;
         g_nvml.dev[i] = h;
 
@@ -421,14 +425,70 @@ void vb_power_end(vb_power *p, double seconds)
     }
 }
 
+/*
+ * The best provider present in a scope. RAPL first, then DRM hwmon, then NVML,
+ * which is the order the header has always documented and the implementation
+ * did not follow: it summed every valid source instead. An NVIDIA card visible
+ * through both DRM and NVML was therefore counted twice.
+ */
+static vb_power_provider scope_provider(const vb_power *p,
+                                        vb_power_scope scope, int *found)
+{
+    vb_power_provider best = VB_PWR_PROV_RAPL;
+    *found = 0;
+    for (int i = 0; i < p->n; i++) {
+        if (p->src[i].scope != scope || !p->src[i].valid)
+            continue;
+        if (!*found || p->src[i].provider < best)
+            best = p->src[i].provider;
+        *found = 1;
+    }
+    return best;
+}
+
 double vb_power_scope_joules(const vb_power *p, vb_power_scope scope)
+{
+    int found = 0;
+    vb_power_provider prov = scope_provider(p, scope, &found);
+    double total = 0.0;
+
+    if (!found)
+        return -1.0;
+
+    /* Sum within the chosen provider only. Two sockets legitimately report two
+       packages, and two cards two GPUs; what must not happen is one device
+       counted once per provider that can see it. */
+    for (int i = 0; i < p->n; i++)
+        if (p->src[i].scope == scope && p->src[i].valid &&
+            p->src[i].provider == prov)
+            total += p->src[i].joules;
+
+    return total;
+}
+
+double vb_power_total_joules(const vb_power *p)
 {
     double total = 0.0;
     int any = 0;
 
-    for (int i = 0; i < p->n; i++) {
-        if (p->src[i].scope == scope && p->src[i].valid) {
-            total += p->src[i].joules;
+    static const vb_power_scope scopes[] = {
+        VB_PWR_CPU_PACKAGE, VB_PWR_CPU_CORES, VB_PWR_GPU, VB_PWR_OTHER
+    };
+
+    for (size_t si = 0; si < sizeof scopes / sizeof scopes[0]; si++) {
+        vb_power_scope sc = scopes[si];
+        int found = 0;
+        vb_power_provider prov = scope_provider(p, sc, &found);
+        if (!found)
+            continue;
+        for (int i = 0; i < p->n; i++) {
+            const vb_power_src *s = &p->src[i];
+            /* Contained domains are inside another scope's figure, and
+               VB_PWR_CPU_CORES is inside the package. Neither is added. */
+            if (s->scope != sc || !s->valid || s->provider != prov ||
+                s->contained || sc == VB_PWR_CPU_CORES)
+                continue;
+            total += s->joules;
             any = 1;
         }
     }

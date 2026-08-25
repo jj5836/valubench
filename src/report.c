@@ -218,11 +218,13 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
     if (r->power.n > 0) {
         double cpu = vb_power_scope_joules(&r->power, VB_PWR_CPU_PACKAGE);
         double gpu = vb_power_scope_joules(&r->power, VB_PWR_GPU);
-        double total = 0.0;
-        int have = 0;
-
-        if (cpu >= 0.0) { total += cpu; have = 1; }
-        if (gpu >= 0.0) { total += gpu; have = 1; }
+        /* Not cpu + gpu. On Intel client parts the GPU figure is the RAPL
+           uncore domain, which is inside the package -- adding them counted
+           the integrated GPU twice and understated hashes/joule by 15% on the
+           development machine. vb_power_total_joules() counts each physical
+           domain once. */
+        double total = vb_power_total_joules(&r->power);
+        int have = total >= 0.0;
 
         fprintf(f, "    \"available\": true,\n");
         if (cpu >= 0.0) {
@@ -373,7 +375,8 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
     {
         double cpu = vb_power_scope_joules(&r->power, VB_PWR_CPU_PACKAGE);
         double gpu = vb_power_scope_joules(&r->power, VB_PWR_GPU);
-        double total = (cpu > 0 ? cpu : 0) + (gpu > 0 ? gpu : 0);
+        /* Each physical domain once; see the JSON path. */
+        double total = vb_power_total_joules(&r->power);
 
         /* Sources can exist yet produce nothing -- a counter that failed to
            sample, say. Print the section only when there is a number in it. */
