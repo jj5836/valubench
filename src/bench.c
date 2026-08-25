@@ -116,6 +116,43 @@ unsigned vb_online_cpus(void)
     return (unsigned) n;
 }
 
+/*
+ * The CPUs this process is actually allowed on, in ascending order.
+ *
+ * Workers used to be pinned to 0, 1, 2 ... on the assumption that the online
+ * CPUs and the permitted ones are the same set. Inside a cpuset, a container,
+ * a batch scheduler or a systemd slice they are not: a process allowed only on
+ * {4, 6, 8, 10} would ask for CPU 0 and be refused. The refusal was ignored,
+ * so the run looked pinned and was not -- and pinning is a claim the results
+ * carry.
+ *
+ * Falls back to the online count if the mask cannot be read, which is the old
+ * behaviour and no worse than it.
+ */
+unsigned vb_allowed_cpus(int *out, unsigned max)
+{
+    cpu_set_t set;
+    unsigned n = 0;
+
+    if (max == 0)
+        return 0;
+
+    if (sched_getaffinity(0, sizeof set, &set) != 0) {
+        unsigned online = vb_online_cpus();
+        for (unsigned i = 0; i < online && n < max; i++)
+            out[n++] = (int) i;
+        return n;
+    }
+
+    for (unsigned cpu = 0; cpu < CPU_SETSIZE && n < max; cpu++)
+        if (CPU_ISSET(cpu, &set))
+            out[n++] = (int) cpu;
+
+    if (n == 0)                      /* an empty mask should not happen */
+        out[n++] = 0;
+    return n;
+}
+
 int vb_batch_divides(const vb_kernel *k)
 {
     return (VB_BATCH_LCM % (k->lanes * k->streams)) == 0;
@@ -186,19 +223,26 @@ struct vb_pool {
     pthread_mutex_t   gate_m;
     pthread_cond_t    gate_cv;
     int               gate;
+
+    /* Set by any worker whose requested CPU was refused. Reported, because a
+       run that could not pin is not the run that was asked for. */
+    int               pin_failed;
     pthread_barrier_t start_bar;
     pthread_barrier_t done_bar;
 };
 
-static void pin_self(int cpu)
+/* Returns 0 on success, -1 if the CPU was refused. A refusal must be visible:
+   a run that says it pinned and did not is a different measurement. */
+static int pin_self(int cpu)
 {
     if (cpu < 0)
-        return;
+        return 0;
 
     cpu_set_t set;
     CPU_ZERO(&set);
     CPU_SET((unsigned) cpu, &set);
-    pthread_setaffinity_np(pthread_self(), sizeof set, &set);
+    return pthread_setaffinity_np(pthread_self(), sizeof set, &set) == 0
+           ? 0 : -1;
 }
 
 /* Hash this worker's slice `reps` times, verifying its own partial checksum. */
@@ -257,7 +301,8 @@ static void *worker_main(void *arg)
     if (go < 0)
         return NULL;
 
-    pin_self(w->cpu);
+    if (pin_self(w->cpu) != 0)
+        p->pin_failed = 1;
     worker_reference(w);
 
     for (;;) {
@@ -320,6 +365,14 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
     if (!p->w)
         return -1;
 
+    /* Pin from the set this process is allowed on, not from 0..n. */
+    int allowed[VB_MAX_THREADS];
+    unsigned n_allowed = vb_allowed_cpus(allowed, VB_MAX_THREADS);
+    if (n_allowed == 0) {
+        allowed[0] = 0;
+        n_allowed = 1;
+    }
+
     uint64_t base = total_groups / threads;
     uint64_t extra = total_groups % threads;
     uint64_t off = 0;
@@ -329,7 +382,7 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
         uint64_t first_msg = off * group;
 
         w->pool = p;
-        w->cpu = cfg->pin_cpu ? (int) (i % vb_online_cpus()) : -1;
+        w->cpu = cfg->pin_cpu ? allowed[i % n_allowed] : -1;
         w->groups = base + (i < extra ? 1 : 0);
         /* A corpus slot holds `lanes` messages, so scale the message offset.
            Elements are alg->word_bytes wide, hence the byte arithmetic. */
@@ -354,7 +407,8 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
     pthread_barrier_init(&p->start_bar, NULL, threads);
     pthread_barrier_init(&p->done_bar, NULL, threads);
 
-    pin_self(p->w[0].cpu);
+    if (pin_self(p->w[0].cpu) != 0)
+        p->pin_failed = 1;
 
     /*
      * All of the workers or none of them.
@@ -912,6 +966,7 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
         return 1;
     }
     out->threads = pool.n;
+    out->pin_failed = pool.pin_failed;
 
     uint64_t reps = calibrate_reps(&pool, cfg->target_ms);
     if (reps == 0) {

@@ -105,6 +105,9 @@ typedef struct {
     uint64_t device_kernel_ns_per_pass;
     uint64_t device_transfer_ns_per_pass;
 
+    /* Pinning was requested and at least one worker was refused its CPU. */
+    int      pin_failed;
+
     vb_power power;             /* energy over the timed region */
 } vb_result;
 

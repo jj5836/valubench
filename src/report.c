@@ -264,12 +264,27 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
     }
     fprintf(f, "  },\n");
 
+    /* Pinning that was asked for and refused belongs here rather than in
+       sysinfo: it is a property of this run, not of the machine. */
+    const char *pinwarn = r->pin_failed
+        ? "thread pinning was requested but at least one CPU was refused; "
+          "the process may be confined to a cpuset that does not include the "
+          "CPUs chosen. Placement is not what was asked for."
+        : NULL;
+
     fprintf(f, "  \"warnings\": [");
     if (warn) {
         fprintf(f, "\n    ");
         json_str(f, warn);
-        fprintf(f, "\n  ");
+        if (pinwarn)
+            fprintf(f, ",");
     }
+    if (pinwarn) {
+        fprintf(f, "\n    ");
+        json_str(f, pinwarn);
+    }
+    if (warn || pinwarn)
+        fprintf(f, "\n  ");
     fprintf(f, "]\n");
 
     fprintf(f, "}\n");
