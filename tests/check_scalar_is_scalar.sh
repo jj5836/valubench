@@ -60,5 +60,18 @@ fi
             exit 1
         }
         n = 0; for (f in total) n++
+        # A guard that cannot find its input must fail, not pass. This printed
+        # "ok scalar-purity (0 kernels, no vector instructions)" on a Graviton4
+        # where the build had gone to build-gcc13 rather than build, so the
+        # object held no scalar symbols -- and the check that exists to stop
+        # the ratio denominator silently becoming vector code silently checked
+        # nothing at all.
+        if (n == 0) {
+            print "  FAIL  scalar-purity  no scalar kernels found in the object"
+            print "        Nothing was checked. Either the object is missing or"
+            print "        the symbol naming changed; either way this guard was"
+            print "        not doing its job."
+            exit 1
+        }
         printf "  ok    scalar-purity  (%d kernels, no vector instructions)\n", n
     }'
