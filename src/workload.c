@@ -220,8 +220,23 @@ void vb_reference_checksums_mt(const vb_algorithm *alg, uint32_t start,
         return;
     }
 
+    /*
+     * Which threads actually started, per thread rather than as a high-water
+     * mark. `spawned = i` assumed the successes formed a contiguous prefix:
+     * if thread 1 failed and thread 2 started, the join loop treated 1 as
+     * running, joined a pthread_t that was never created, and XORed slice 1's
+     * untouched zeros into the reference. A wrong oracle is worse than a slow
+     * one -- it fails correct kernels.
+     */
+    unsigned char *started = calloc(threads, 1);
+    if (!started) {
+        free(sl); free(tid); free(part);
+        vb_reference_checksums(alg, start, count, message_bytes, iters,
+                               n_iters, out);
+        return;
+    }
+
     uint64_t base = count / threads, extra = count % threads, off = 0;
-    unsigned spawned = 0;
     for (unsigned i = 0; i < threads; i++) {
         sl[i].alg = alg;
         sl[i].start = start + (uint32_t) off;
@@ -232,20 +247,25 @@ void vb_reference_checksums_mt(const vb_algorithm *alg, uint32_t start,
         sl[i].out = part + (size_t) i * n_iters;
         off += sl[i].count;
         if (i > 0 && pthread_create(&tid[i], NULL, ref_slice_main, &sl[i]) == 0)
-            spawned = i;
+            started[i] = 1;
     }
     ref_slice_main(&sl[0]);               /* this thread takes slice 0 */
 
     for (unsigned i = 0; i < threads; i++) {
-        if (i > 0 && i <= spawned)
-            pthread_join(tid[i], NULL);
-        else if (i > 0)
+        if (i > 0 && started[i]) {
+            /* A join that fails leaves the slice in an unknown state, so
+               compute it here rather than trust it. Doing the work twice is
+               harmless: the slice is a pure function of its range. */
+            if (pthread_join(tid[i], NULL) != 0)
+                ref_slice_main(&sl[i]);
+        } else if (i > 0) {
             ref_slice_main(&sl[i]);       /* a create failed; do it here */
+        }
         for (unsigned k = 0; k < n_iters; k++)
             for (unsigned j = 0; j < VB_MAX_DIGEST_WORDS; j++)
                 out[k][j] ^= sl[i].out[k][j];
     }
-    free(sl); free(tid); free(part);
+    free(started); free(sl); free(tid); free(part);
 }
 
 void vb_reference_checksum_mt(const vb_algorithm *alg, uint32_t start,

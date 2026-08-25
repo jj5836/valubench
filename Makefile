@@ -394,13 +394,33 @@ check-report: $(BUILD)/test_report_json
 check-contract: $(BUILD)/valubench
 	@sh tests/check_output_contract.sh $(BUILD)/valubench .
 
+$(BUILD)/fail_pthread_create.so: tests/fail_pthread_create.c
+	$(CC) $(CFLAGS) -fPIC -shared -o $@ $< -ldl
+
+$(BUILD)/test_thread_failure: tests/test_thread_failure.c $(BUILD)/workload.o \
+                              $(BUILD)/algorithm.o $(REF_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ -pthread
+
+# A thread that fails to start must not corrupt the reference. Injected at each
+# index in turn, because the defect this covers only appears when the failure is
+# not the last one -- a contiguous prefix of successes was always handled.
+check-threadfail: $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so
+	@for n in 1 2 3 4; do \
+	   LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
+	     $(BUILD)/test_thread_failure > $(BUILD)/.tf.log 2>&1 || \
+	     { echo "  FAIL  thread-failure with create $$n failing"; \
+	       cat $(BUILD)/.tf.log; exit 1; }; \
+	 done; \
+	 $(BUILD)/test_thread_failure | sed 's/^/  ok    threadfail  /'
+
 check-checkpoints: $(BUILD)/test_checkpoints
 	@$(BUILD)/test_checkpoints
 
 check-working-set: $(BUILD)/valubench
 	@sh tests/check_working_set.sh $(BUILD)/valubench
 
-check: test check-kernels check-scalar check-checkpoints check-working-set \
+check: test check-kernels check-scalar check-checkpoints check-threadfail \
+       check-working-set \
        check-report check-contract
 
 clean:
