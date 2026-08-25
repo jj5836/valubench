@@ -45,8 +45,8 @@ First public release. What it contains:
 ### The benchmark
 
 - **MD5, SHA-1 and SHA-512**, each written from its specification rather than
-  adapted from an existing implementation, which is what lets the whole tree be
-  public domain.
+  adapted from an existing implementation, which is what leaves the whole tree
+  free of any third-party notice.
 - **A compile-time kernel matrix selected at runtime**: scalar, SSE2, AVX2,
   AVX-512 and SHA-NI on x86, NEON on AArch64, OpenCL on a device, each at one to
   four interleaved streams. One binary carries every path, `CPUID` and

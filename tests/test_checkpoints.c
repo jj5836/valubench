@@ -1,8 +1,8 @@
 /*
  * test_checkpoints.c -- the checkpointed reference must equal the serial one.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * vb_reference_checksums() walks each message once to the largest requested
  * iteration count and snapshots the accumulator at each rung, because the

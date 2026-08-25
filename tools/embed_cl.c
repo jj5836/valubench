@@ -1,8 +1,8 @@
 /*
  * embed_cl.c -- turn a kernel source file into a C string literal.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * The OpenCL kernel has to reach the driver as a string, but writing it as a
  * string literal by hand costs syntax highlighting, escaping, and any hope of a
@@ -60,8 +60,12 @@ int main(int argc, char **argv)
     printf(" * guarantees 4095-character string literals and a kernel exceeds\n");
     printf(" * that; an array initialiser has no such limit.\n");
     printf(" *\n");
-    printf(" * This is free and unencumbered software released into the public"
-           " domain.\n");
+    /* No licence notice here on purpose. This header is generated into the
+       build directory, is gitignored, and is never redistributed as source;
+       the .cl file it comes from carries the SPDX tag, and a binary is covered
+       by shipping LICENSE. A notice here would only be one more place to
+       forget when the licence changes -- as it just was. */
+    printf(" * Licence follows the .cl source this was generated from.\n");
     printf(" */\n\n");
     printf("#ifndef %s\n", guard);
     printf("#define %s\n\n", guard);

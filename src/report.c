@@ -1,8 +1,8 @@
 /*
  * report.c -- JSON and human-readable output.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Both renderers read the same structs, so the two views cannot disagree about
  * what was measured. JSON is the primary artifact:

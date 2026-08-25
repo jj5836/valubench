@@ -1,8 +1,8 @@
 /*
  * backend.c -- OpenCL device context: build, upload, launch, verify.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * This file knows nothing about hash functions. Kernel source arrives complete
  * -- each kernel in src/kernels/gpu carries its own constants and schedules, and

@@ -1,8 +1,8 @@
 /*
  * sve_lanes.c -- the run-time vector length, in the units the registry wants.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * One tiny translation unit of its own because it is the only code outside the
  * SVE kernels that needs arm_sve.h, and registry.c must not be compiled with

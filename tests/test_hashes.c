@@ -1,8 +1,8 @@
 /*
  * test_hashes.c -- correctness tests for the scalar reference hashes.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * The reference implementation is the oracle every other kernel is checked
  * against, so it has to be checked against something external: the published

@@ -1,8 +1,8 @@
 /*
  * vb_cl.h -- the OpenCL interface valubench uses.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  *
  * TWO WAYS TO GET THE DECLARATIONS

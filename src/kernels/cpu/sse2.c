@@ -1,8 +1,8 @@
 /*
  * kernel_sse2.c -- 4-lane SSE2 kernels.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * SSE2 is guaranteed by the x86-64 baseline, so this path needs no runtime
  * check on that target. It has neither a rotate instruction nor 3-input boolean

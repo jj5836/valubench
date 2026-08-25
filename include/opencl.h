@@ -1,8 +1,8 @@
 /*
  * opencl.h -- runtime-loaded OpenCL backend.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Nothing here is linked at build time. libOpenCL is dlopen'd on first use and
  * every entry point resolved into a table, so valubench builds with no SDK and

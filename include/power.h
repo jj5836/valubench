@@ -1,8 +1,8 @@
 /*
  * power.h -- energy measurement.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * For a buyer comparing hardware, energy per unit of work usually matters more
  * than throughput: it drives both the electricity bill and the rack density a

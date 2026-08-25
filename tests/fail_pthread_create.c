@@ -1,8 +1,8 @@
 /*
  * fail_pthread_create.c -- make one pthread_create() fail, on purpose.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * LD_PRELOAD this and set VB_FAIL_CREATE=N to make the Nth call fail with
  * EAGAIN, one-based. Every other call is forwarded.

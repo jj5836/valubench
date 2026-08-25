@@ -1,8 +1,8 @@
 /*
  * algorithm.h -- what the harness needs to know about a hash function.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Everything the corpus builder, the reference oracle and the reporting need in
  * order to be algorithm-agnostic. Kernels remain algorithm-specific -- MD5's 64

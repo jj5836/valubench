@@ -2,8 +2,8 @@
 #
 # run.sh -- one-command capture for a time-boxed session on rented hardware.
 #
-# This is free and unencumbered software released into the public domain.
-# See LICENSE.
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026, The valubench authors. See LICENSE.
 #
 # Written for the case where the clock is running on a machine you are paying
 # for and you want data rather than a shell history. It captures the

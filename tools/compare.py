@@ -2,8 +2,8 @@
 """
 compare.py -- diff two sets of valubench results.
 
-This is free and unencumbered software released into the public domain.
-See LICENSE.
+SPDX-License-Identifier: BSD-3-Clause
+Copyright (c) 2026, The valubench authors. See LICENSE.
 
 One run prints one number; the question that actually matters is whether it
 moved. This reads two sets of results -- single JSON files, directories of

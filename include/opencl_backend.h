@@ -1,8 +1,8 @@
 /*
  * opencl_backend.h -- a built, uploaded, ready-to-launch OpenCL device context.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  */
 
 #ifndef VALUBENCH_OPENCL_BACKEND_H

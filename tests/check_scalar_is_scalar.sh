@@ -2,8 +2,8 @@
 #
 # check_scalar_is_scalar.sh -- the scalar kernel must contain no vector code.
 #
-# This is free and unencumbered software released into the public domain.
-# See LICENSE.
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026, The valubench authors. See LICENSE.
 #
 # The scalar rung is the denominator of every ISA ratio this project reports,
 # so it has to be scalar. It silently was not: at -O2 gcc fuses the independent

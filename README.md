@@ -1,13 +1,13 @@
 # valubench
 
 [![build and check](https://github.com/erichardisty/valubench/actions/workflows/ci.yml/badge.svg)](https://github.com/erichardisty/valubench/actions/workflows/ci.yml)
-[![license: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
+[![license: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
 An integer SIMD microbenchmark. It measures how fast hardware executes the
 general-purpose integer vector path, using hashing as the vehicle, and verifies that
 the hardware computed the right answer while doing it.
 
-Public domain (Unlicense). Builds with a C11 compiler and make. No configure
+BSD 3-Clause. Builds with a C11 compiler and make. No configure
 step, no network access at build or run time, and the binary links only libc —
 OpenCL and NVML are `dlopen`'d, so the same build runs with or without a GPU.
 
@@ -243,6 +243,8 @@ The MD5 core is written from the RFC 1321 specification, and the round constants
 are generated from `T[i] = floor(2^32 * abs(sin(i)))` rather than transcribed. No
 code is copied from any existing MD5 implementation. That includes the RFC 1321
 reference implementation, which carries an RSA notice, and permissive-licensed
-implementations, which require their notice be retained in derivatives —
-obligations incompatible with a public domain dedication. See
+implementations, which require their notice be retained in derivatives. The
+project was written under a public-domain dedication, where neither obligation
+could be accepted; it is BSD 3-Clause now, which could accept them, but the
+code is already free of both. See
 [docs/research.md](docs/research.md) §2.9.

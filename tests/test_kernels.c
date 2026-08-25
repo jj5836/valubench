@@ -1,8 +1,8 @@
 /*
  * test_kernels.c -- every kernel must agree with the scalar reference.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * The XOR checksum is invariant to lane, stream and iteration assignment, so a
  * single expected value from the reference validates every (ISA, streams)

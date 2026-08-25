@@ -1,8 +1,8 @@
 /*
  * sha1.cl -- the OpenCL SHA-1 kernel.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Same construction as md5.cl: a real .cl file embedded by tools/embed_cl.c,
  * with LANES and STREAMS arriving as -D so one source specialises into every

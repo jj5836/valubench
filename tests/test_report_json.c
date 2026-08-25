@@ -1,8 +1,8 @@
 /*
  * test_report_json.c -- the JSON must parse for result shapes hardware is rare.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * check_output_contract.sh parses the documents a real run produces, which is
  * most of what matters and misses exactly the defect that motivated it: the

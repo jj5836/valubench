@@ -1,8 +1,8 @@
 /*
  * cpu_features.c -- runtime ISA detection via CPUID.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Checking the CPUID feature bit alone is not enough for AVX and AVX-512: the
  * OS must also have enabled the wider register state via XCR0, or the

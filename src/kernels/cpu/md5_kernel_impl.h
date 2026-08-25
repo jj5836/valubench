@@ -1,8 +1,8 @@
 /*
  * md5_kernel_impl.h -- the multi-way MD5 kernel, written once.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * This header is included repeatedly, once per (ISA, stream count) variant,
  * with the vector operations supplied as macros by the including translation

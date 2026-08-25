@@ -1,8 +1,8 @@
 /*
  * power.c -- energy measurement from powercap, DRM hwmon and NVML.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * See power.h for what is measured and why. Everything here is optional and
  * failure is never fatal: a machine that exposes no energy counters simply

@@ -1,8 +1,8 @@
 /*
  * sha512.c -- scalar reference SHA-512, from FIPS 180-4.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Written from the specification (sections 4.1.3, 5.3.5, 6.4). Constants are
  * transcribed from the standard in include/sha512_const.h.

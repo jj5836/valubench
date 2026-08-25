@@ -1,8 +1,8 @@
 /*
  * loader.c -- dlopen libOpenCL and resolve entry points at runtime.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * The whole point is that no OpenCL SDK is needed to build valubench, and a
  * machine with no GPU runs the same binary without complaint. Absence of OpenCL

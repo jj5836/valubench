@@ -367,13 +367,17 @@ same mechanism.
 
 ## 8. A decision with consequences that reached into the code
 
-**Public domain licensing constrains the implementation, not just the header.**
-The obvious sources to crib an MD5 from are all encumbered: the RFC 1321
-reference implementation carries an RSA notice, and permissive-licensed
-implementations still require their notice be retained in derivatives. None can
-be copied into a public-domain project. The MD5 core had to be written from the
-specification with constants generated from the sine formula. Worth deciding the
-licence before writing code, not after.
+**The licence constrained the implementation, not just the header.** The obvious
+sources to crib an MD5 from are all encumbered: the RFC 1321 reference
+implementation carries an RSA notice, and permissive-licensed implementations
+still require their notice be retained in derivatives. Neither could be accepted
+under the public-domain dedication the project started with, so the MD5 core was
+written from the specification with constants generated from the sine formula.
+
+The project is BSD 3-Clause now, which *could* accept a retained notice — but
+the code is already free of any, so relicensing changed no line of it. That is
+the point worth keeping: decide the licence before writing the code, because the
+strict choice leaves you free to loosen later and the loose one does not.
 
 ## 9. Validation hardware is a project dependency
 

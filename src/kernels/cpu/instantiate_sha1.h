@@ -2,8 +2,8 @@
  * instantiate_sha1.h -- map a translation unit's OPS_* macros onto the SHA-1
  * kernel template and emit one kernel.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Usage, after defining the 32-bit OPS_* set once per ISA:
  *

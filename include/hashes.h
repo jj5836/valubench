@@ -1,8 +1,8 @@
 /*
  * hashes.h -- scalar reference implementations, written from their specs.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * These are the correctness oracles every SIMD and GPU kernel is validated
  * against, so they are written for auditability rather than speed. None is

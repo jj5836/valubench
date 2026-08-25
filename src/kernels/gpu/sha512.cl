@@ -1,8 +1,8 @@
 /*
  * sha512.cl -- the OpenCL SHA-512 kernel.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Same construction as md5.cl and sha1.cl -- a real .cl file embedded by
  * tools/embed_cl.c, LANES and STREAMS arriving as -D, and the constant tables

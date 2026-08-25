@@ -1,8 +1,8 @@
 /*
  * kernel_avx2.c -- 8-lane AVX2 kernels.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Twice SSE2's width, but architecturally the same shape: AVX2 still has no
  * 32-bit vector rotate and no 3-input boolean instruction, so a round function

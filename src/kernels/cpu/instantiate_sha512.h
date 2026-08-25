@@ -2,8 +2,8 @@
  * instantiate_sha512.h -- map a translation unit's OPS64_* macros onto the
  * SHA-512 kernel template and emit one kernel.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Distinct from instantiate_sha1.h because SHA-512 needs the ISA's 64-bit
  * operation set, not its 32-bit one -- different lane count, different add,

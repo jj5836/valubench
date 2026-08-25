@@ -2,8 +2,8 @@
 """
 sweep.py -- drive valubench across a parameter grid and collect the results.
 
-This is free and unencumbered software released into the public domain.
-See LICENSE.
+SPDX-License-Identifier: BSD-3-Clause
+Copyright (c) 2026, The valubench authors. See LICENSE.
 
 Python's role in this project is orchestration only. It never enters a timed
 region: it invokes the C binary, parses the JSON the binary emits, and arranges

@@ -1,8 +1,8 @@
 /*
  * kernel_scalar.c -- portable single-lane kernels.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * No intrinsics, no ISA assumptions. This is the fallback that lets valubench
  * produce a number on any C11 target, and the baseline the SIMD paths are

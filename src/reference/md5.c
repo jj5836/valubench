@@ -1,8 +1,8 @@
 /*
  * md5.c -- scalar reference MD5, implemented from the RFC 1321 specification.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Written from the algorithm description in RFC 1321 sections 3.1-3.4. No code
  * is derived from any existing MD5 implementation -- see docs/research.md section 2.9

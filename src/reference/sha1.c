@@ -1,8 +1,8 @@
 /*
  * sha1.c -- scalar reference SHA-1, from FIPS 180-4.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Written from the specification (sections 4.1.1, 5.3.1, 6.1). No code derives
  * from an existing implementation; the constants are transcribed from the

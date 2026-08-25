@@ -1,8 +1,8 @@
 /*
  * cpu_features.h -- runtime ISA detection.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * valubench ships every SIMD path in one binary and picks at runtime, rather
  * than building with -march=native. A -march=native binary's behaviour depends

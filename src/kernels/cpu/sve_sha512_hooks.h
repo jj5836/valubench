@@ -1,8 +1,8 @@
 /*
  * sve_sha512_hooks.h -- SVE overrides for the SHA-512 template.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Included once per stream count, immediately before the template, because
  * the template #undef's its hooks on the way out and because these depend on

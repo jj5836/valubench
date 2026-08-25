@@ -1,8 +1,8 @@
 /*
  * neon.c -- 4-lane ARM Advanced SIMD (NEON) kernels.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * The same 128-bit width as SSE2, and the comparison between the two is part of
  * the point: the operation sets differ in ways that show up in the round

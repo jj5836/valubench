@@ -1,8 +1,8 @@
 /*
  * md5.cl -- the OpenCL MD5 kernel.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * A real .cl file, not a C string: editable with syntax highlighting and no
  * escaping. tools/embed_cl.c turns it into a byte array the binary carries, so

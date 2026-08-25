@@ -329,12 +329,16 @@ measuring less, so they are excluded structurally rather than by discipline: the
 message corpus lives in memory and `-flto` is prohibited, so the compiler cannot
 apply them either.
 
-### 2.9 Licensing constraint: public domain constrains the implementation
+### 2.9 Licensing constraint: the licence constrained the implementation
 
-The project requires a **public domain** license (decision 7), which constrains
-where the MD5 core may come from and not just what the LICENSE file says. It is
-satisfiable because of the distinction between an *implementation* and an
-*algorithm*:
+The project was written under a **public domain** dedication (decision 7), which
+constrained where the MD5 core could come from and not just what the LICENSE
+file said. It relicensed to **BSD 3-Clause** in 2026 and no code changed, because
+everything below was already satisfied — which is the argument for choosing the
+strict licence first.
+
+The constraint was satisfiable because of the distinction between an
+*implementation* and an *algorithm*:
 
 - **MD5 is nobody's to license.** It is specified in RFC 1321, and an algorithm
   is not the subject of copyright. Anyone may implement it.
@@ -721,16 +725,27 @@ Resolved in discussion on 2026-08-16, before implementation began.
    restructuring. The SVE vector-length-agnostic question (§4.2) is deferred with
    the phase, but the recommendation stands: VLA-native.
 
-7. **License: public domain.** This constrains how the MD5 core may be written —
-   see §2.9. No source may be copied from any existing MD5 implementation: the
-   RFC 1321 reference carries an RSA notice, and permissive-licensed ones require
-   their notice be retained in derivatives. The implementation is written from
-   the specification with generated constants.
-   Instrument chosen: **The Unlicense** (see `LICENSE`). Noted for the record:
-   CC0 1.0 has stronger standing in jurisdictions that do not recognise
-   dedication to the public domain, whereas the Unlicense is simpler and more
-   common for code. Neither grants patent rights, which is immaterial here — MD5
-   dates to 1992 and is patent-free.
+7. **License: BSD 3-Clause** (was public domain). The original decision
+   constrained how the MD5 core could be written — see §2.9. No source may be
+   copied from any existing MD5 implementation: the RFC 1321 reference carries an
+   RSA notice, and permissive-licensed ones require their notice be retained in
+   derivatives. The implementation is written from the specification with
+   generated constants.
+
+   **Relicensed 2026-08-25 to BSD 3-Clause**, copyright "The valubench authors".
+   No code changed, because the stricter constraint was already satisfied
+   everywhere — which is the whole argument for picking the strict licence
+   before writing anything. Sources carry an SPDX tag rather than a copyright
+   line, so the holder is named in one file. Generated headers carry no notice
+   at all: they are gitignored, never redistributed as source, and the `.cl`
+   files they come from are tagged.
+
+   Noted for the record, from when the choice was public domain: CC0 1.0 has
+   stronger standing in jurisdictions that do not recognise dedication to the
+   public domain, whereas the Unlicense is simpler and more common for code.
+   Neither grants patent rights, and neither does BSD 3-Clause — immaterial
+   here, since MD5 dates to 1992 and is patent-free. BSD 3-Clause was chosen
+   over MIT for its non-endorsement clause.
 
 8. **Multi-threading via a persistent, batch-partitioned worker pool.** The
    verified batch is split across threads; each thread holds the reference

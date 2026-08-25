@@ -1,8 +1,8 @@
 /*
  * sve_hooks.h -- hold per-stream state in named variables, not arrays.
  *
- * This is free and unencumbered software released into the public domain.
- * See LICENSE.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * The three kernel templates keep every piece of per-stream state in arrays
  * indexed by stream. SVE types are sizeless, so those arrays do not compile:
