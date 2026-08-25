@@ -404,13 +404,23 @@ $(BUILD)/test_thread_failure: tests/test_thread_failure.c $(BUILD)/workload.o \
 # A thread that fails to start must not corrupt the reference. Injected at each
 # index in turn, because the defect this covers only appears when the failure is
 # not the last one -- a contiguous prefix of successes was always handled.
-check-threadfail: $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so
+check-threadfail: $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so \
+                  $(BUILD)/valubench
 	@for n in 1 2 3 4; do \
 	   LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
 	     $(BUILD)/test_thread_failure > $(BUILD)/.tf.log 2>&1 || \
 	     { echo "  FAIL  thread-failure with create $$n failing"; \
 	       cat $(BUILD)/.tf.log; exit 1; }; \
 	 done; \
+	 EXP=$$($(BUILD)/valubench --reference-ladder 1 --algorithm md5 \
+	          --message-bytes 55 --working-set-kb 1024 \
+	        | grep -o '"checksum": "[0-9a-f]*"' | cut -d'"' -f4); \
+	 LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=1 \
+	   $(BUILD)/valubench --kernel md5/scalar-s1 --threads 4 --expect $$EXP \
+	   --samples 2 --time-ms 20 --warmup-ms 20 > /dev/null 2>&1 && rc=0 || rc=$$?; \
+	 if [ "$$rc" = 0 ]; then \
+	   echo "  FAIL  threadfail  a partial pool reported a result"; exit 1; \
+	 fi
 	 $(BUILD)/test_thread_failure | sed 's/^/  ok    threadfail  /'
 
 check-checkpoints: $(BUILD)/test_checkpoints

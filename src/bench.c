@@ -173,6 +173,19 @@ struct vb_pool {
     /* A whole-corpus reference supplied by the caller. See vb_config. */
     int               have_expected;
     uint64_t          expected[VB_MAX_DIGEST_WORDS];
+
+    /*
+     * Workers wait here before touching a barrier: 0 pending, 1 go, -1 abort.
+     *
+     * Barriers used to be sized for the requested thread count, then destroyed
+     * and reinitialised smaller if a pthread_create failed -- while workers
+     * already released may have been blocked on them, which POSIX does not
+     * allow. The gate means a barrier is initialised once, for a count that is
+     * already final, and an aborted worker never reaches one.
+     */
+    pthread_mutex_t   gate_m;
+    pthread_cond_t    gate_cv;
+    int               gate;
     pthread_barrier_t start_bar;
     pthread_barrier_t done_bar;
 };
@@ -233,6 +246,17 @@ static void *worker_main(void *arg)
     vb_worker *w = (vb_worker *) arg;
     vb_pool *p = w->pool;
 
+    /* Nothing before this touches a barrier, so a pool that gives up can let
+       these threads go without any of them being mid-wait. */
+    pthread_mutex_lock(&p->gate_m);
+    while (p->gate == 0)
+        pthread_cond_wait(&p->gate_cv, &p->gate_m);
+    int go = p->gate;
+    pthread_mutex_unlock(&p->gate_m);
+
+    if (go < 0)
+        return NULL;
+
     pin_self(w->cpu);
     worker_reference(w);
 
@@ -262,6 +286,8 @@ static void pool_destroy(vb_pool *p)
 
     pthread_barrier_destroy(&p->start_bar);
     pthread_barrier_destroy(&p->done_bar);
+    pthread_cond_destroy(&p->gate_cv);
+    pthread_mutex_destroy(&p->gate_m);
     free(p->w);
     p->w = NULL;
 }
@@ -321,21 +347,58 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
 
     /* Worker 0 is the driving thread, so only threads-1 are spawned and the
        barriers count `threads` participants in total. */
+    pthread_mutex_init(&p->gate_m, NULL);
+    pthread_cond_init(&p->gate_cv, NULL);
+    p->gate = 0;
+
     pthread_barrier_init(&p->start_bar, NULL, threads);
     pthread_barrier_init(&p->done_bar, NULL, threads);
 
     pin_self(p->w[0].cpu);
 
+    /*
+     * All of the workers or none of them.
+     *
+     * Continuing with fewer used to look like graceful degradation and was
+     * not: the slices were already sized for the requested count, so the
+     * workers that never started left their share of the corpus unhashed --
+     * while hashes_per_iter still counted the whole of it. A pool that fell
+     * back from four threads to one reported 176 MH/s against a true 43, and
+     * called it verified. Four times too fast and wrong, which is the one
+     * result this benchmark must never produce.
+     *
+     * Re-slicing for the smaller pool would be the alternative, but a machine
+     * that cannot start a thread is not one to trust a measurement from.
+     */
+    unsigned live = 1;                     /* worker 0 is this thread */
+    int short_by = 0;
+
     for (unsigned i = 1; i < threads; i++) {
         if (pthread_create(&p->w[i].tid, NULL, worker_main, &p->w[i]) != 0) {
-            /* Rebuild the barriers around the workers that actually started. */
-            p->n = i;
-            pthread_barrier_destroy(&p->start_bar);
-            pthread_barrier_destroy(&p->done_bar);
-            pthread_barrier_init(&p->start_bar, NULL, i);
-            pthread_barrier_init(&p->done_bar, NULL, i);
+            short_by = 1;
             break;
         }
+        live++;
+    }
+
+    pthread_mutex_lock(&p->gate_m);
+    p->gate = short_by ? -1 : 1;
+    pthread_cond_broadcast(&p->gate_cv);
+    pthread_mutex_unlock(&p->gate_m);
+
+    if (short_by) {
+        for (unsigned i = 1; i < live; i++)
+            pthread_join(p->w[i].tid, NULL);
+        pthread_barrier_destroy(&p->start_bar);
+        pthread_barrier_destroy(&p->done_bar);
+        pthread_cond_destroy(&p->gate_cv);
+        pthread_mutex_destroy(&p->gate_m);
+        free(p->w);
+        p->w = NULL;
+        fprintf(stderr, "valubench: could not start %u threads; refusing to "
+                        "measure a partial pool. Try a smaller --threads.\n",
+                threads);
+        return -1;
     }
 
     /* Worker 0 runs on the calling thread. Doing its slice here, after the
