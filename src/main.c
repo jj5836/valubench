@@ -111,6 +111,8 @@ static int parse_devices(const char *spec, vb_config *cfg)
 
     for (const char *p = spec; *p; ) {
         char *end;
+
+        errno = 0;
         long v = strtol(p, &end, 10);
 
         if (end == p) {
@@ -118,8 +120,27 @@ static int parse_devices(const char *spec, vb_config *cfg)
                             "got '%s'\n", spec);
             return -1;
         }
-        if (cfg->device_count >= VB_MAX_THREADS)
-            break;
+        if (errno == ERANGE || v < 0 || v > VB_OCL_MAX_DEVICES - 1) {
+            fprintf(stderr, "valubench: --device index %ld is out of range "
+                            "(0..%d)\n", v, VB_OCL_MAX_DEVICES - 1);
+            return -1;
+        }
+        /* Refuse rather than truncate. Silently dropping the tail of a device
+           list would measure something other than what was asked for. */
+        if (cfg->device_count >= VB_OCL_MAX_DEVICES) {
+            fprintf(stderr, "valubench: --device takes at most %d indices\n",
+                    VB_OCL_MAX_DEVICES);
+            return -1;
+        }
+        /* A repeated index would give one physical device two slices of the
+           corpus and count it twice in the aggregate. */
+        for (int i = 0; i < cfg->device_count; i++) {
+            if (cfg->device_index[i] == (int) v) {
+                fprintf(stderr, "valubench: --device lists device %ld twice\n",
+                        v);
+                return -1;
+            }
+        }
         cfg->device_index[cfg->device_count++] = (int) v;
 
         p = end;

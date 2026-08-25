@@ -10,6 +10,7 @@
 
 #include "valubench.h"
 #include "power.h"
+#include "opencl.h"
 
 #include <stdint.h>
 
@@ -134,7 +135,14 @@ typedef struct {
     const vb_algorithm *alg;    /* which hash to benchmark */
     unsigned working_set_kb;    /* target corpus size; sets the batch count */
     /* OpenCL devices to use. Empty means every device found. */
-    int      device_index[VB_MAX_THREADS];
+    /*
+     * Sized by what the measurement path can hold, not by the thread limit.
+     * These were VB_MAX_THREADS (1024) while measure_device() reserves
+     * VB_OCL_MAX_DEVICES (32), and the copy between them was unchecked: 33
+     * valid indices segfaulted. Out-of-range indices were already rejected, so
+     * reaching it needed duplicates, which the parser accepted.
+     */
+    int      device_index[VB_OCL_MAX_DEVICES];
     int      device_count;
     vb_transfer_mode transfer;  /* how the corpus reaches a device */
     vb_where where;             /* which kernels autotune may pick from */

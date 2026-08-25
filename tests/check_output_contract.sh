@@ -146,6 +146,20 @@ expect_exit 2 "trailing garbage"      "$BIN" --message-bytes 12x
 expect_exit 2 "negative"              "$BIN" --threads -4
 expect_exit 2 "out of range"          "$BIN" --samples 0
 expect_exit 2 "unknown algorithm"     "$BIN" --algorithm nosuchalg
+
+# --device used to bound at VB_MAX_THREADS (1024) while the measurement path
+# reserved VB_OCL_MAX_DEVICES (32), and copied between them unchecked. Indices
+# out of range were rejected, so overflowing it needed repeats -- and repeats
+# were accepted. Thirty-three of them segfaulted on any machine with a GPU.
+#
+# These cases need no device present: the parser rejects them before the
+# OpenCL path is entered, which is the point.
+expect_exit 2 "device list too long"  "$BIN" --device "$(python3 -c 'print(",".join(["0"]*33))')"
+expect_exit 2 "device index repeated" "$BIN" --device 0,0
+expect_exit 2 "device out of range"   "$BIN" --device 99
+expect_exit 2 "device negative"       "$BIN" --device -1
+expect_exit 2 "device overflows long" "$BIN" --device 99999999999999999999
+expect_exit 2 "device not a number"   "$BIN" --device zz
 expect_exit 2 "expect, wrong width"   "$BIN" --expect deadbeef
 expect_exit 2 "expect, not hex"       "$BIN" --expect "$(printf 'z%.0s' $(seq 32))"
 expect_exit 2 "ladder descending"     "$BIN" --reference-ladder 8,4,1
