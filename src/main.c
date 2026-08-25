@@ -667,11 +667,13 @@ int main(int argc, char **argv)
         }
         fprintf(stderr,
 "valubench: VERIFICATION FAILED for kernel '%s'.\n"
-"  The hardware did not compute correct MD5 digests. No performance number\n"
+"  The hardware did not compute correct %s digests. No performance number\n"
 "  is reported, because a fast wrong answer is not a result. Causes worth\n"
 "  checking: overclocking, marginal cooling, unstable memory, or a compiler\n"
-"  bug. Run '%s --kernel scalar-s1 --threads 1' to test the portable path.\n",
-                k->name, argv[0]);
+"  bug. Run '%s --algorithm %s --kernel %s/scalar-s1 --threads 1' to test\n"
+"  the portable path.\n",
+                k->name, cfg.alg->name, argv[0], cfg.alg->name,
+                cfg.alg->name);
         if (r.device_error[0])
             fprintf(stderr, "  device reported: %s\n", r.device_error);
         return VB_EXIT_VERIFY_FAILED;
