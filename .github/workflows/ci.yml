@@ -167,3 +167,101 @@ jobs:
             echo "  kernel_$isa.o: $n SVE-register instructions"
             test "$n" -gt 1000
           done
+
+  # Address and UB sanitizers. This is the job that would have caught the
+  # 32-entry device-array overrun on its own, without anyone thinking to try
+  # 33 duplicate indices -- which is the argument for having it.
+  #
+  # Not the whole gate: scalar-purity disassembles the scalar kernel and counts
+  # vector instructions, and sanitizer instrumentation changes that count. The
+  # correctness suites are what matter here.
+  sanitizers:
+    runs-on: ubuntu-latest
+    name: asan + ubsan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build instrumented
+        run: |
+          make CC=gcc CFLAGS_EXTRA="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+               BUILD=build-san config
+          make CC=gcc CFLAGS_EXTRA="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+               BUILD=build-san -j$(nproc)
+
+      - name: known-answer vectors and every kernel
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          ./build-san/test_hashes
+          ./build-san/test_kernels
+          ./build-san/test_checkpoints
+
+      # The CLI is the reachable attack surface: everything here is a local
+      # input that once crashed or truncated.
+      - name: argument handling under sanitizers
+        env:
+          ASAN_OPTIONS: abort_on_error=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -e
+          long=$(python3 -c 'print(",".join(["0"]*64))')
+          for a in "--device $long" "--device 0,0" "--device 99" "--device -1" \
+                   "--device 99999999999999999999" "--threads abc" \
+                   "--message-bytes 12x" "--samples 0" "--reference-ladder 8,4,1"; do
+            ./build-san/valubench $a >/dev/null 2>&1 && rc=0 || rc=$?
+            echo "  $a -> exit $rc"
+            test "$rc" = 2 || { echo "expected a usage error"; exit 1; }
+          done
+          # --where cpu on purpose. Some GPU drivers dlopen their compiler with
+          # RTLD_DEEPBIND, which sanitizer runtimes cannot coexist with; that is
+          # a known sanitizer limitation rather than anything about this code,
+          # and the device path is covered by the pocl job instead.
+          ./build-san/valubench --json --where cpu --samples 2 --time-ms 30 \
+            --warmup-ms 30 > /dev/null
+
+  # OpenCL has never executed in CI: no runner has a GPU. POCL provides a CPU
+  # device, which exercises the host side -- loader, enumeration, corpus
+  # upload, program build, readback and the device verification path -- none of
+  # which needs real silicon to be wrong.
+  opencl-software:
+    runs-on: ubuntu-latest
+    name: opencl (pocl)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install a software OpenCL device
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pocl-opencl-icd ocl-icd-libopencl1 opencl-headers
+
+      - name: build
+        run: make config && make -j$(nproc)
+
+      - name: a device must be visible
+        run: |
+          ./build/valubench --list-devices
+          ./build/valubench --list-devices --json > devices.json
+          python3 -c "import json; d = json.load(open('devices.json'))['opencl']; assert d.get('devices'), 'pocl is installed but no device was enumerated'; print('  enumerated %d device(s)' % len(d['devices']))"
+
+      - name: the device path must agree with the scalar reference
+        run: |
+          set -e
+          for k in md5/ocl-s1 sha1/ocl-s1 sha512/ocl-s1; do
+            alg=${k%%/*}
+            got=$(./build/valubench --algorithm $alg --kernel $k --samples 2 \
+                    --time-ms 50 --warmup-ms 50 \
+                  | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+            want=$(./build/valubench --algorithm $alg --kernel $alg/scalar-s1 \
+                     --samples 2 --time-ms 50 --warmup-ms 50 \
+                   | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+            echo "  $k $got"
+            test "$got" = "$want"
+          done
+
+      - name: streaming transfer and multi-device slicing must also verify
+        run: |
+          ./build/valubench --kernel md5/ocl-s1 --transfer stream \
+            --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"
+          ./build/valubench --kernel md5/ocl-s2 --device 0 \
+            --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"

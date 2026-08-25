@@ -340,6 +340,22 @@ if [ "$SKIP_CHECK" = 0 ]; then
         note "CHECK FAILED -- every number below is suspect. Continuing anyway;"
         note "the failure is the result in that case. See check.log"
         grep -E "FAIL|failures" "$OUT/check.log" | head -20 | show
+        # Stop closed was the reviewer's suggestion and would break what this
+        # harness is for: on a rented box the capture is the evidence you
+        # diagnose from before terminating, and a failed gate is exactly when
+        # you need it. But a bundle can be copied away from the warning that
+        # came with it, so the bundle carries its own.
+        : > "$OUT/INVALID"
+        {
+            echo "The correctness gate failed on this machine."
+            echo
+            echo "Every measurement in this capture was taken after 'make check'"
+            echo "reported failures, and none of it should be quoted, compared or"
+            echo "published. It is kept because a failed gate is a result and the"
+            echo "capture is how you diagnose it."
+            echo
+            echo "See check.log for what failed."
+        } >> "$OUT/INVALID"
     fi
 else
     say "correctness gate SKIPPED by request"

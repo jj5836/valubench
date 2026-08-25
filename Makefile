@@ -41,6 +41,11 @@ LDLIBS  ?=
 # pthreads. -pthread is understood by both GCC and Clang and sets both the
 # compile-time and link-time requirements.
 CFLAGS  += -pthread
+
+# A hook for build-time instrumentation -- sanitizers in CI, mainly. Appended
+# last so it can override, and empty by default so a normal build is untouched.
+CFLAGS  += $(CFLAGS_EXTRA)
+LDFLAGS += $(CFLAGS_EXTRA)
 LDLIBS  += -pthread
 
 BUILD := build
