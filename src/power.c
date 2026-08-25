@@ -225,12 +225,32 @@ static void scan_powercap(vb_power *p, int *denied)
 
 static void scan_drm_hwmon(vb_power *p)
 {
-    for (int card = 0; card < 8; card++) {
-        char base[256];
+    /*
+     * Enumerate the cards that exist rather than assuming card0..card7. The
+     * benchmark drives up to VB_OCL_MAX_DEVICES accelerators, so a fixed range
+     * of eight silently dropped energy for anything numbered above it, and
+     * DRM numbering is not guaranteed contiguous in the first place.
+     */
+    DIR *drm = opendir("/sys/class/drm");
+    struct dirent *ce;
+
+    if (!drm)
+        return;
+
+    while ((ce = readdir(drm)) != NULL) {
+        char base[sizeof "/sys/class/drm//device/hwmon" + 256];
         DIR *d;
         struct dirent *e;
+        int card;
 
-        snprintf(base, sizeof base, "/sys/class/drm/card%d/device/hwmon", card);
+        if (sscanf(ce->d_name, "card%d", &card) != 1)
+            continue;
+        /* card0-DP-1 and friends are connectors, not devices. */
+        if (strchr(ce->d_name, '-'))
+            continue;
+
+        snprintf(base, sizeof base, "/sys/class/drm/%s/device/hwmon",
+                 ce->d_name);
         d = opendir(base);
         if (!d)
             continue;
@@ -273,6 +293,8 @@ static void scan_drm_hwmon(vb_power *p)
         }
         closedir(d);
     }
+
+    closedir(drm);
 }
 
 static void scan_nvml(vb_power *p)
@@ -417,10 +439,24 @@ void vb_power_end(vb_power *p, double seconds)
             double w = ((double) s->start_uj + (double) now) / 2.0 / 1e6;
             s->joules = w * seconds;
         } else {
-            uint64_t delta = (now >= s->start_uj)
-                           ? now - s->start_uj
-                           : (s->wrap_uj - s->start_uj) + now;
-            s->joules = (double) delta / 1e6;
+            if (now >= s->start_uj) {
+                s->joules = (double) (now - s->start_uj) / 1e6;
+            } else if (s->wrap_uj > 0) {
+                /* powercap publishes max_energy_range_uj, so the modulus is
+                   known and the counter can be unwrapped. */
+                s->joules = (double)
+                    ((s->wrap_uj - s->start_uj) + now) / 1e6;
+            } else {
+                /*
+                 * The counter went backwards and nothing told us its range --
+                 * hwmon energy and NVML do not publish one. A wrap, a reset, a
+                 * driver reload and a device reset all look like this, and
+                 * guessing a modulus turns any of them into a plausible
+                 * number. Refuse the source for this interval instead.
+                 */
+                s->valid = 0;
+                s->joules = 0.0;
+            }
         }
     }
 }

@@ -186,11 +186,26 @@ int vb_ocl_devices(vb_ocl_device *out, int max)
         return 0;
 
     const vb_ocl *cl = vb_ocl_api();
-    cl_platform_id platforms[16];
+    /*
+     * GetPlatformIDs reports the number of platforms that *exist*, not the
+     * number it wrote. Looping to the reported count read past the array on a
+     * host with more than sixteen platforms; the count is now clamped to what
+     * was actually filled in.
+     */
+    enum { MAX_PLATFORMS = 16 };
+    cl_platform_id platforms[MAX_PLATFORMS];
     cl_uint n_platforms = 0;
     int n = 0;
 
-    cl_int err = cl->GetPlatformIDs(16, platforms, &n_platforms);
+    if (max < 0)
+        max = 0;
+    if (max > VB_OCL_MAX_DEVICES)
+        max = VB_OCL_MAX_DEVICES;
+
+    cl_int err = cl->GetPlatformIDs(MAX_PLATFORMS, platforms, &n_platforms);
+    if (n_platforms > MAX_PLATFORMS)
+        n_platforms = MAX_PLATFORMS;
+
     if (err != CL_SUCCESS || n_platforms == 0) {
         snprintf(g_error, sizeof g_error,
                  "OpenCL loaded but reports no platforms (%s). A driver may be "
