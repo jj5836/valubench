@@ -943,10 +943,21 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     out->working_set_bytes = corpus->n_messages * (uint64_t) corpus->blocks
                            * corpus->alg->block_bytes;
 
+    /*
+     * One exit for the CPU path. Six error returns used to leave vb_power
+     * owning open sysfs descriptors and, where NVML loaded, a live session --
+     * and the timed-sample failure returned after vb_power_begin() without
+     * ever ending it. Scattered teardown is also the thing that makes the next
+     * change to measurement state easy to get wrong.
+     */
+    int rc = 1;
+    int pool_ready = 0;
+    int power_running = 0;
+
     vb_power_open(&out->power);
 
     if (k->device) {
-        int rc = measure_device(k, cfg, corpus, out);
+        rc = measure_device(k, cfg, corpus, out);
         vb_power_close(&out->power);
         return rc;
     }
@@ -956,23 +967,23 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     if (!vb_validate_kernel(k, cfg, corpus, got, expected)) {
         out->verified = 0;
         memcpy(out->checksum, got, sizeof got);
-        return 1;
+        goto done;
     }
     memcpy(out->checksum, expected, sizeof expected);
 
     vb_pool pool;
     if (pool_create(&pool, k, cfg, corpus, threads) != 0) {
         out->verified = 0;
-        return 1;
+        goto done;
     }
+    pool_ready = 1;
     out->threads = pool.n;
     out->pin_failed = pool.pin_failed;
 
     uint64_t reps = calibrate_reps(&pool, cfg->target_ms);
     if (reps == 0) {
-        pool_destroy(&pool);
         out->verified = 0;
-        return 1;
+        goto done;
     }
 
     /* Warm up: reach steady clocks and let caches and predictors settle.
@@ -982,9 +993,8 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
         int ok;
         pool_run(&pool, reps, &ok);
         if (!ok) {
-            pool_destroy(&pool);
             out->verified = 0;
-            return 1;
+            goto done;
         }
     }
 
@@ -998,9 +1008,8 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
         int ok;
         uint64_t ns = pool_run(&pool, reps, &ok);
         if (!ok) {
-            pool_destroy(&pool);
             out->verified = 0;
-            return 1;
+            goto done;
         }
         if (ns > 0) {
             double want = (double) reps *
@@ -1017,15 +1026,15 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     out->hashes_per_iter = reps * corpus->n_messages;
 
     vb_power_begin(&out->power);
+    power_running = 1;
 
     for (unsigned i = 0; i < n; i++) {
         int ok;
         uint64_t ns = pool_run(&pool, reps, &ok);
         if (!ok) {
-            pool_destroy(&pool);
             out->verified = 0;
             out->n_samples = i;
-            return 1;
+            goto done;
         }
         double sec = (double) ns / 1e9;
         out->sample_hps[i] = (double) out->hashes_per_iter / sec;
@@ -1034,13 +1043,21 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     }
 
     vb_power_end(&out->power, out->total_seconds);
-    pool_destroy(&pool);
-    vb_power_close(&out->power);
+    power_running = 0;
 
     out->n_samples = n;
     out->verified = 1;
+    rc = 0;
     compute_stats(out);
-    return 0;
+
+    /* Success falls through: the teardown is the same either way. */
+done:
+    if (power_running)
+        vb_power_end(&out->power, out->total_seconds);
+    if (pool_ready)
+        pool_destroy(&pool);
+    vb_power_close(&out->power);
+    return rc;
 }
 
 int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out)
