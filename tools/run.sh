@@ -159,7 +159,21 @@ package() {
     printf '    copy it off with:  scp %s:%s .\n' \
            "$(hostname -s 2>/dev/null || echo HOST)" "$OUT.tar.gz"
 }
-trap package EXIT INT TERM
+# Ctrl-C must stop the run, not fall through into the next phase. A single
+# trap that only returns leaves that to the shell's discretion, and can run the
+# packaging twice -- once on the signal and again on the eventual exit.
+#
+# So: signals set the conventional status and exit; EXIT does the packaging
+# once and preserves whatever status brought us here.
+vb_packaged=0
+package_once() {
+    [ "$vb_packaged" = 1 ] && return 0
+    vb_packaged=1
+    package
+}
+trap 'vb_rc=$?; package_once; exit $vb_rc' EXIT
+trap 'say "interrupted"; exit 130' INT
+trap 'say "terminated"; exit 143' TERM
 
 if [ "$QUICK" = 1 ]; then
     SAMPLES=3; TIME_MS=100; WARMUP=150; FREQ_SECS=6
@@ -591,14 +605,17 @@ $SW --algorithm md5,sha1,sha512 --where cpu --threads 1 \
 $SW --algorithm md5,sha1,sha512 --where cpu --threads "$NPROC" \
     --csv "$OUT/c5-allcores.csv" >> "$LOG" 2>&1
 for f in c5-1thread c5-allcores; do
-    [ -s "$OUT/$f.csv" ] && python3 -c "
-import csv,sys
-print('      $f')
-for r in csv.DictReader(open('$OUT/$f.csv')):
-    if r['hashes_per_sec']:
-        print('        %-8s %-16s %10.2f MH/s  CoV %5s%%' % (
-            r['algorithm'], r['kernel'], float(r['hashes_per_sec'])/1e6, r['cov_percent']))
-" | show
+    [ -s "$OUT/$f.csv" ] && python3 - "$f" "$OUT/$f.csv" <<'PY' | show
+import csv, sys
+label, path = sys.argv[1], sys.argv[2]
+print('      %s' % label)
+with open(path, newline='') as fh:
+    for r in csv.DictReader(fh):
+        if r['hashes_per_sec']:
+            print('        %-8s %-16s %10.2f MH/s  CoV %5s%%' % (
+                r['algorithm'], r['kernel'],
+                float(r['hashes_per_sec']) / 1e6, r['cov_percent']))
+PY
 done
 
 note "checksum cross-check against the recorded machine-independent values:"
@@ -903,11 +920,13 @@ if [ "$NDEV" -gt 0 ]; then
     $SW --algorithm md5,sha1,sha512 --kernel "$KS" --transfer resident \
         --working-set-kb 65536 --csv "$OUT/d2-device-streams.csv" >> "$LOG" 2>&1
     [ -s "$OUT/d2-device-streams.csv" ] && \
-        python3 -c "
-import csv,sys
-for r in csv.DictReader(open('$OUT/d2-device-streams.csv')):
-    print('      %-16s %10.2f MH/s  CoV %5s%%' % (r['kernel'], float(r['hashes_per_sec'])/1e6, r['cov_percent']))
-" | show
+        python3 - "$OUT/d2-device-streams.csv" <<'PY' | show
+import csv, sys
+with open(sys.argv[1], newline='') as fh:
+    for r in csv.DictReader(fh):
+        print('      %-16s %10.2f MH/s  CoV %5s%%' % (
+            r['kernel'], float(r['hashes_per_sec']) / 1e6, r['cov_percent']))
+PY
 fi
 
 # ------------------------------------------------- D3: memory / working set
