@@ -181,12 +181,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # -O1 rather than the default -O2: sanitizer builds do not need it, and a
+      # single cc1 on the instrumented s8 kernels peaked at 2.3 GB, which OOM'd
+      # a 3.8 GB machine at -j2. GitHub's runner survives -O2 today; this is
+      # insurance against a smaller one, and it builds faster.
+      #
+      # The test binaries are named explicitly. `all` builds valubench,
+      # test_hashes and test_kernels but not test_checkpoints -- which is a
+      # dependency of check-checkpoints -- so running it here exited 127.
       - name: build instrumented
+        env:
+          SAN: -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -g
         run: |
-          make CC=gcc CFLAGS_EXTRA="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
-               BUILD=build-san config
-          make CC=gcc CFLAGS_EXTRA="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
-               BUILD=build-san -j$(nproc)
+          make CC=gcc CFLAGS_EXTRA="$SAN" BUILD=build-san config
+          make CC=gcc CFLAGS_EXTRA="$SAN" BUILD=build-san -j$(nproc) \
+               build-san/valubench build-san/test_hashes \
+               build-san/test_kernels build-san/test_checkpoints
 
       - name: known-answer vectors and every kernel
         env:
@@ -217,8 +227,16 @@ jobs:
           # RTLD_DEEPBIND, which sanitizer runtimes cannot coexist with; that is
           # a known sanitizer limitation rather than anything about this code,
           # and the device path is covered by the pocl job instead.
+          #
+          # 0 or 3, not 0. Exit 3 means the run was too noisy to trust, which is
+          # a normal outcome on a shared runner and says nothing about whether
+          # the sanitizers found anything. Demanding 0 here would make the job
+          # flaky for a reason unrelated to what it tests -- the same trap
+          # check_output_contract.sh already documents.
           ./build-san/valubench --json --where cpu --samples 2 --time-ms 30 \
-            --warmup-ms 30 > /dev/null
+            --warmup-ms 30 > /dev/null && rc=0 || rc=$?
+          echo "  cpu run exited $rc"
+          test "$rc" = 0 || test "$rc" = 3
 
   # OpenCL has never executed in CI: no runner has a GPU. POCL provides a CPU
   # device, which exercises the host side -- loader, enumeration, corpus
