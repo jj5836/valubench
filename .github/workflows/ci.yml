@@ -93,6 +93,51 @@ jobs:
           echo "neon: $got"
           test "$got" = "955e84cbbc05470019604a2bd9ff2821"
 
+      # The binary must start on an AArch64 CPU *without* SVE.
+      #
+      # It is built with SVE support on any toolchain that can emit it -- the
+      # Makefile probes the compiler, not the host -- so every SVE row is
+      # registered and gated at run time by HWCAP. Anything that reaches an SVE
+      # instruction before that gate is a SIGILL on Graviton2, Ampere Altra, a
+      # Raspberry Pi, or any Cortex-A5x/A7x.
+      #
+      # Not hypothetical: resolve_lanes() called svcntw() with no available()
+      # check and every one of those machines died at startup, on a build whose
+      # whole test suite passed. Nothing else here could see it, because qemu's
+      # default linux-user CPU has SVE -- the `check` step above runs on a
+      # 512-bit SVE machine without saying so.
+      - name: the binary must start on AArch64 without SVE
+        env:
+          QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+        run: |
+          fail=0
+          for cpu in neoverse-n1 cortex-a72 cortex-a53 max,sve=off; do
+            qemu-aarch64-static -cpu $cpu ./build-arm64/valubench --list \
+              >/dev/null 2>&1 && rc=0 || rc=$?
+            if [ "$rc" = 0 ]; then echo "  ok   $cpu --list"
+            else echo "  FAIL $cpu --list exit $rc"; fail=1; fi
+          done
+          # It must compute, not merely enumerate.
+          want=955e84cbbc05470019604a2bd9ff2821
+          got=$(qemu-aarch64-static -cpu neoverse-n1 ./build-arm64/valubench \
+                  --kernel md5/neon-s4 --threads 1 --samples 2 --time-ms 20 \
+                  --warmup-ms 20 | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+          if [ "$got" = "$want" ]; then echo "  ok   neoverse-n1 md5/neon-s4"
+          else echo "  FAIL neoverse-n1 md5/neon-s4: $got"; fail=1; fi
+          # And the full suite must pass there, which is what catches a guard
+          # that stops the crash by quietly breaking something else.
+          qemu-aarch64-static -cpu neoverse-n1 ./build-arm64/test_kernels \
+            | tail -1 | sed 's/^/  /'
+          qemu-aarch64-static -cpu neoverse-n1 ./build-arm64/test_kernels \
+            >/dev/null 2>&1 || fail=1
+          # The SVE rows must be present-but-unavailable, not absent: a build
+          # that dropped them would pass everything above while testing nothing.
+          n=$(qemu-aarch64-static -cpu neoverse-n1 ./build-arm64/valubench \
+                --list | grep -c 'sve' || true)
+          echo "  sve rows registered on a non-SVE cpu: $n"
+          test "$n" -gt 0 || fail=1
+          test "$fail" = 0
+
       # One binary, four vector lengths, one answer.
       #
       # SVE picks its width from the hardware, so the lane count -- and every

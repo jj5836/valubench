@@ -155,7 +155,16 @@ unsigned vb_allowed_cpus(int *out, unsigned max)
 
 int vb_batch_divides(const vb_kernel *k)
 {
-    return (VB_BATCH_LCM % (k->lanes * k->streams)) == 0;
+    unsigned group = k->lanes * k->streams;
+
+    /* lanes is 0 for a run-time-width kernel this CPU cannot run, and AArch64
+       UDIV by zero yields 0 rather than trapping -- so without this the modulo
+       quietly returns VB_BATCH_LCM and the kernel looks merely misconfigured.
+       On x86 the same expression is SIGFPE. */
+    if (group == 0)
+        return 0;
+
+    return (VB_BATCH_LCM % group) == 0;
 }
 
 uint64_t vb_batch_messages(const vb_config *cfg)

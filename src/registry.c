@@ -107,7 +107,12 @@ static void resolve_lanes(void)
 {
     size_t n = sizeof lanes_fn / sizeof lanes_fn[0];
     for (size_t i = 0; i < n; i++)
-        if (lanes_fn[i])
+        /* available() first, and not as a courtesy: lanes_fn is compiled with
+           the ISA's -march flag, so calling it on a CPU without that ISA is an
+           illegal instruction, not a wrong answer. A kernel that cannot run
+           here keeps lanes = 0, which vb_batch_divides() reads as "no group
+           size" rather than dividing by it. */
+        if (lanes_fn[i] && kernels[i].available())
             kernels[i].lanes = lanes_fn[i]();
 }
 

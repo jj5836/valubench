@@ -187,6 +187,14 @@ int vb_cpu_has_sve(void)
 int vb_cpu_has_sve2(void)
 {
 #if defined(HWCAP2_SVE2) && VB_HAVE_SVE2
+    /* FEAT_SVE2 implies FEAT_SVE, so requiring both changes nothing on real
+       silicon -- but the pair is not always reported consistently. qemu's
+       `-cpu max,sve=off` clears HWCAP_SVE and leaves HWCAP2_SVE2 set, and
+       trusting the second bit alone puts an svcntw() on a machine that will
+       not execute one. The SVE2 kernels use the SVE base instructions too,
+       so the weaker of the two claims is the one to believe. */
+    if (!vb_cpu_has_sve())
+        return 0;
     return (getauxval(AT_HWCAP2) & HWCAP2_SVE2) != 0;
 #else
     return 0;

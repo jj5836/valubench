@@ -9,9 +9,11 @@
  * -march=armv8-a+sve: it is the dispatcher, and an ISA that leaks into the
  * dispatcher faults before the runtime check that was supposed to prevent it.
  *
- * svcntw and svcntb are not instructions that require SVE data registers, but
- * they still need the feature enabled at compile time, hence the separate file
- * and its own KFLAGS entry.
+ * svcntw and svcntd touch no SVE data register, which makes them look safe to
+ * call anywhere. They are not: CNTW and CNTD are SVE instructions and are UNDEF
+ * on a CPU without SVE, so calling either one before vb_cpu_has_sve() is a
+ * SIGILL and not a wrong lane count. The registry checks available() first --
+ * see resolve_lanes() in registry.c, which is the only caller.
  */
 
 #include "cpu_features.h"

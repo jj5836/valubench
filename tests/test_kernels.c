@@ -111,6 +111,13 @@ int main(void)
      * every other kernel's.
      */
     for (size_t i = 0; i < count; i++) {
+        /* Structural, but not knowable for every kernel: an SVE row takes its
+           lane count from the hardware, and reports 0 when this CPU has no
+           SVE. There is no group size to check, so there is nothing to fail. */
+        if (ks[i].lanes == 0) {
+            printf("  skip  %-16s (lane count needs the ISA)\n", ks[i].name);
+            continue;
+        }
         checks++;
         if (!vb_batch_divides(&ks[i])) {
             failures++;
