@@ -429,12 +429,25 @@ check-threadfail: $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so \
 	 EXP=$$($(BUILD)/valubench --reference-ladder 1 --algorithm md5 \
 	          --message-bytes 55 --working-set-kb 1024 \
 	        | grep -o '"checksum": "[0-9a-f]*"' | cut -d'"' -f4); \
-	 LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=1 \
-	   $(BUILD)/valubench --kernel md5/scalar-s1 --threads 4 --expect $$EXP \
-	   --samples 2 --time-ms 20 --warmup-ms 20 > /dev/null 2>&1 && rc=0 || rc=$$?; \
-	 if [ "$$rc" = 0 ]; then \
-	   echo "  FAIL  threadfail  a partial pool reported a result"; exit 1; \
-	 fi
+	 for n in 1 2 3 4 5 6; do \
+	   out=$$(LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
+	          timeout -s KILL 60 \
+	          $(BUILD)/valubench --json --kernel md5/scalar-s1 --threads 4 \
+	          --expect $$EXP --samples 2 --time-ms 20 --warmup-ms 20 2>/dev/null) \
+	         && rc=0 || rc=$$?; \
+	   if [ "$$rc" = 137 ] || [ "$$rc" = 124 ]; then \
+	     echo "  FAIL  threadfail  create $$n hung; a stalled pool is not a pass"; \
+	     exit 1; \
+	   fi; \
+	   if [ "$$rc" != 0 ]; then continue; fi; \
+	   used=$$(printf '%s' "$$out" | python3 -c \
+	     'import json,sys; print(json.load(sys.stdin)["environment"]["threads_used"])' \
+	     2>/dev/null); \
+	   if [ "$$used" != 4 ]; then \
+	     echo "  FAIL  threadfail  a pool of $$used reported a result (wanted 4)"; \
+	     exit 1; \
+	   fi; \
+	 done
 	 $(BUILD)/test_thread_failure | sed 's/^/  ok    threadfail  /'
 
 check-checkpoints: $(BUILD)/test_checkpoints

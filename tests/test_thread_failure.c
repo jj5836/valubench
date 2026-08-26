@@ -16,6 +16,13 @@
  *
  * Run under tests/fail_pthread_create.so with VB_FAIL_CREATE set to each index
  * in turn. The multithreaded answer must equal the serial one every time.
+ *
+ * The pool half of this check (in the Makefile) asserts an invariant rather
+ * than an index, because the index is not portable: on a machine with an
+ * NVIDIA driver, enumerating devices spawns a thread before the pool exists,
+ * so fault 1 lands on the driver and the pool starts intact. What must hold
+ * everywhere is that a run either fails or uses every thread it asked for --
+ * never a degraded pool with a number attached.
  */
 
 #include "valubench.h"
