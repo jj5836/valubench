@@ -82,12 +82,19 @@
 #define OPS64_CH(x, y, z)  svbsl_u64((y), (z), (x))
 #define OPS64_MAJ(x, y, z) svbsl_u64((z), (x), sveor_u64_x(SVE_P64, (x), (y)))
 /*
- * No OPS64_XOR3 here, deliberately. SHA-512's four sigmas are three-way XORs
- * and EOR3 collapses each into one instruction, so this should be free money.
- * Measured, it costs 3%: the sigma operands are rotations of the same value
- * and stay live across all four, and EOR3 is destructive, so preserving them
- * costs more than the fused XOR saves. MD5's H and SHA-1's schedule keep
- * OPS_XOR3 because there it wins.
+ * No OPS64_XOR3, because defining it changes nothing: both toolchains already
+ * contract sveor(sveor(a,b),c) into EOR3 in the sigma expansion. Adding the
+ * macro leaves clang's object byte-identical and gcc's mix unchanged -- 288
+ * EOR3 either way for sha512/sve2-s1, one extra movprfx and some scheduling
+ * churn. An earlier note put the cost at 3% and blamed EOR3's destructive
+ * encoding; whatever that measured, it was not this macro.
+ *
+ * The 32-bit OPS_XOR3 above is not the same story, and not for the reason the
+ * old note gave either. It is worth nothing to MD5's H -- identical objects
+ * with and without -- but SHA-1's schedule needs it spelled out: removing it
+ * costs 4.7% of gcc's instructions and 15.1% of clang's on sha1/sve2-s1. The
+ * EOR3 count is 104 either way, so the macro is not adding EOR3s; it is
+ * keeping the compiler from materialising the intermediate XOR.
  */
 
 /* Every algorithm at every stream count, from the shared matrix. The hooks are

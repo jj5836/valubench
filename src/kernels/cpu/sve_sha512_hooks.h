@@ -16,8 +16,9 @@
 #define S5K_V2(name, k, i)  VB_SVE_V2(name, k, i)
 #define S5K_FOLDN           VB_MAX_LANES
 
-/* As the template default; see the MD5 hooks for the base-register experiment
-   and why it lost. */
+/* Pinned, as in the MD5 hooks -- see there for the numbers. sha512/sve2-s1
+   prefers it by ~4-7%; s2 is the one row that would rather have the template
+   default. */
 #define S5K_TDECL                                       \
     const uint64_t *s5k_tbase = SHA512_K;               \
     __asm__ ("" : "+r" (s5k_tbase));

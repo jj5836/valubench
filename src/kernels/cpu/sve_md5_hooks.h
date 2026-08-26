@@ -17,14 +17,22 @@
 #define MD5K_FOLDN           VB_MAX_LANES
 
 /*
- * Round constants: the same as the template's default.
+ * Round constants, pinned: the empty asm keeps MD5_T's base in a register
+ * rather than rematerialised, so ld1rw reaches every constant by immediate
+ * offset instead of an adrp+add pair.
  *
- * Pinning the table base in a register with an empty asm was tried and is 30%
- * worse. It does what it promises in isolation -- eight MD5 rounds go from 52
- * instructions to 36, because ld1rw takes an immediate offset and stops
- * needing adrp+add for every constant -- but the kernel has no register to
- * spare, and holding one across the whole function costs more in spills than
- * the addressing saves. Measured, not assumed.
+ * Static counts favour this on both toolchains. md5/sve2-s1 is 711
+ * instructions against 904 under gcc 13.3, with adrp falling from 69 to 7,
+ * and 875 against 905 under clang 18.1; s2 and s4 and sha512-s1 agree by
+ * 1.8-13.8%. sha512/sve2-s2 is the one row that prefers the default, by
+ * 0.5-2.9%.
+ *
+ * The note that stood here said the opposite -- that pinning measured 30%
+ * worse -- and described this override as the template default, which it has
+ * never been. Nothing reproduces the 30%, and no capture records it. Counting
+ * instructions is not measuring throughput, so this is the reason to keep the
+ * form and not proof it is faster: settle it with md5/sve2-s1 both ways on a
+ * Graviton4 if it ever pays to.
  */
 #define MD5K_TDECL                                      \
     const uint32_t *md5k_tbase = MD5_T;                 \
