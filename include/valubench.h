@@ -198,6 +198,15 @@ typedef struct {
      * checksum -- matches the CPU kernels exactly.
      */
     int          device;
+
+    /*
+     * Set when `lanes` came from the hardware rather than the build. A group
+     * size that does not tile VB_BATCH_LCM is a build error for a fixed-width
+     * kernel and merely this machine's vector length for a run-time one --
+     * 12 lanes x 3 streams on 384-bit SVE tiles nothing, and the kernel is
+     * blameless. Callers that refuse such a kernel should say which it is.
+     */
+    int          lanes_runtime;
 } vb_kernel;
 
 /* Registry. Kernels whose available() returns 0 are never selected. */

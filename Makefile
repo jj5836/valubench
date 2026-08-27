@@ -236,7 +236,8 @@ KERNEL_OBJS := $(addprefix $(BUILD)/kernel_,$(addsuffix .o,$(KERNELS)))
 # The vector length in lanes, which the registry needs and which requires
 # arm_sve.h -- so it cannot live in registry.c, which must stay free of any
 # ISA flag. Its own translation unit, built with +sve, doing nothing else.
-ifeq ($(HAVE_SVE),yes)
+# Either ISA needs it: the SVE2 rows in matrix.h call the same two functions.
+ifneq ($(filter yes,$(HAVE_SVE) $(HAVE_SVE2)),)
   KERNEL_OBJS += $(BUILD)/sve_lanes.o
 endif
 
@@ -281,6 +282,8 @@ config:
 	@echo "avx512f     $(HAVE_AVX512)"
 	@echo "sha-ni      $(HAVE_SHANI)"
 	@echo "neon        $(HAVE_NEON)"
+	@echo "sve         $(HAVE_SVE)"
+	@echo "sve2        $(HAVE_SVE2)"
 	@echo "kernels     $(KERNELS)"
 	@echo "CL headers  $(HAVE_CL_HEADERS) $(if $(filter no,$(HAVE_CL_HEADERS)),(using built-in declarations; install opencl-headers to use the real ones),)"
 

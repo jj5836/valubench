@@ -17,13 +17,30 @@
  */
 
 #include "cpu_features.h"
+#include "valubench.h"   /* VB_MAX_LANES */
 
 #if VB_HAVE_SVE
 
 #include <arm_sve.h>
 
-unsigned vb_sve_lanes32(void) { return (unsigned) svcntw(); }
-unsigned vb_sve_lanes64(void) { return (unsigned) svcntd(); }
+/*
+ * 0 means "not usable here", which the registry and main.c already handle.
+ * VB_MAX_LANES sizes the fold scratch and both schedule windows, and 2048-bit
+ * SVE -- the architectural maximum -- gives exactly 64 of them, so the fit is
+ * exact with no margin. If a wider vector ever appears, decline it rather than
+ * overrun those buffers.
+ */
+unsigned vb_sve_lanes32(void)
+{
+    uint64_t n = svcntw();
+    return n <= VB_MAX_LANES ? (unsigned) n : 0;
+}
+
+unsigned vb_sve_lanes64(void)
+{
+    uint64_t n = svcntd();
+    return n <= VB_MAX_LANES ? (unsigned) n : 0;
+}
 
 #else
 

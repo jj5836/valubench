@@ -10,11 +10,18 @@
  * SVE1 has none of the bit-manipulation operations this workload wants. SVE2
  * adds all of them:
  *
- *   BSL   three-input bitwise select, so MD5's F and G and SHA's Ch cost one
- *         instruction instead of three
+ *   BSL   three-input bitwise select, so MD5's F and G and SHA's Ch replace
+ *         three instructions
  *   EOR3  three-way XOR, for MD5's H and SHA-1's Parity
  *   SRI   shift-right-and-insert, so a rotate is two instructions not three
  *   XAR   xor then rotate in one, which SHA-1's schedule expansion ends with
+ *
+ * All four are destructive, and gcc prefixes nearly every one with movprfx to
+ * preserve an operand -- md5/sve2-s1 carries 64 movprfx against 64 xar and 32
+ * bsl. Counted as encoded they are two instructions, not one; Neoverse is
+ * expected to eliminate movprfx at rename, so the saving should be real in
+ * issue slots even where it is not real in the listing. Unverified on
+ * hardware.
  *
  * So SVE2 is not "SVE, newer": for an add-rotate-xor hash it is a materially
  * better instruction set at the same width. Neoverse V2 offers SVE2 at 128
@@ -46,8 +53,11 @@
 
 /*
  * XAR is xor-then-rotate-right in one instruction. With a zero operand it is a
- * plain rotate, and rotating left by n is rotating right by 32 - n. One
- * instruction where shift-left plus shift-right-and-insert is two.
+ * plain rotate, and rotating left by n is rotating right by 32 - n. Encoded it
+ * is two -- movprfx then xar -- against two for shift-left plus
+ * shift-right-and-insert, so this wins only if movprfx is eliminated at rename.
+ * It measured faster either way: 711 instructions against 775 for the sri form
+ * on md5/sve2-s1 under gcc 13.3.
  */
 #define OPS_ROTL(x, n)  svxar_n_u32((x), svdup_n_u32(0), 32 - (n))
 

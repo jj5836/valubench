@@ -256,6 +256,10 @@ int vb_cpu_has_avx2(void)     { return 0; }
 int vb_cpu_has_avx512f(void)  { return 0; }
 int vb_cpu_has_sha_ni(void)   { return 0; }
 int vb_cpu_has_neon(void)     { return 0; }
+int vb_cpu_has_sve(void)      { return 0; }
+int vb_cpu_has_sve2(void)     { return 0; }
+unsigned vb_sve_lanes32(void) { return 0; }
+unsigned vb_sve_lanes64(void) { return 0; }
 const char *vb_cpu_brand(void) { return "unknown"; }
 
 #endif

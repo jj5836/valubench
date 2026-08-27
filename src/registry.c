@@ -54,7 +54,7 @@ VB_FOR_EACH_KERNEL(VB_DECL_KERNEL)
 
 #define VB_ROW_KERNEL(alg, isa, st, isaname, algid, avail, lanes, lfn)      \
     { VB_KNAME(alg, isa, st), isaname, algid, lanes, st,                    \
-      VB_KSYM(alg, isa, st), avail, 0 },
+      VB_KSYM(alg, isa, st), avail, 0, (lanes) == 0 },
 
 /*
  * Not const, because of the SVE rows below. Everything else about this table
@@ -69,7 +69,7 @@ static vb_kernel kernels[] = {
      */
 #define VB_DEV_ROW(alg, ALG, algid, entry, st)                              \
     { VB_KNAME(alg, ocl, st), "OpenCL", algid, VB_OCL_LANES, st,            \
-      NULL, have_opencl, 1 },
+      NULL, have_opencl, 1, 0 },
 #define VB_DEV_ALG(alg, ALG, algid, entry)      \
     VB_DEV_ROW(alg, ALG, algid, entry, 1)       \
     VB_DEV_ROW(alg, ALG, algid, entry, 2)       \

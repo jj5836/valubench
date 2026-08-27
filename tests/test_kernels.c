@@ -118,13 +118,26 @@ int main(void)
             printf("  skip  %-16s (lane count needs the ISA)\n", ks[i].name);
             continue;
         }
-        checks++;
         if (!vb_batch_divides(&ks[i])) {
+            /* A run-time lane count that does not tile the batch is this
+               machine's vector length, not a defect: main.c declines the
+               kernel with a diagnostic and exit 2, and the digests it does
+               produce are correct. Only a fixed-width kernel can be wrong
+               here, and then it is wrong on every machine. */
+            if (ks[i].lanes_runtime) {
+                printf("  skip  %-16s (%u lanes x %u streams does not tile "
+                       "%u at this vector length)\n", ks[i].name,
+                       ks[i].lanes, ks[i].streams, VB_BATCH_LCM);
+                continue;
+            }
+            checks++;
             failures++;
             printf("  FAIL  %s: group size %u does not divide VB_BATCH_LCM "
                    "(%u)\n", ks[i].name, ks[i].lanes * ks[i].streams,
                    VB_BATCH_LCM);
+            continue;
         }
+        checks++;
     }
 
     for (size_t i = 0; i < count; i++) {
