@@ -48,6 +48,25 @@ there. The kernel matrix in `src/kernels/cpu/matrix.h` is the single source of
 truth — registry rows and forward declarations are expanded from it, so
 `src/registry.c` is never edited by hand.
 
+**A vector-length-agnostic ISA is not three steps.** SVE and SVE2 take their
+width from the hardware, and their types are *sizeless*: `svuint32_t a[4];` is a
+hard compile error, as is `sizeof`, a struct member, or anything else that needs
+a width at compile time. The shared kernel templates declare per-stream state as
+exactly those arrays, so an ISA like this cannot use them as written.
+
+The way through is the hook system: each template wraps its state declarations
+and accessors in `#ifndef` blocks whose defaults are the original code, and
+`sve_hooks.h` and friends override them with individually named scalars and
+memory-backed schedule windows. Two consequences worth knowing before you start:
+
+- **The defaults must reproduce the original code exactly.** The x86 objects are
+  byte-identical with and without the hooks, and that is checked per symbol. If
+  you touch a template, verify it that way.
+- **The lane count is a run-time value.** It comes from `svcntw()`/`svcntd()`,
+  so a kernel registers `lanes = 0` at build time and the registry fills it in.
+  Anything that assumes a width — a buffer size, an offset, a loop bound — is a
+  bug that only appears on hardware you probably do not have.
+
 ## Verifying a change did what you think
 
 Two techniques this project leans on, worth knowing:
@@ -82,6 +101,44 @@ Emulated **throughput is meaningless** — do not record it. Emulated
 threads, devices *and architectures*, so a kernel that produces the same value
 under qemu as on x86 is computing the right thing. That is the property worth
 testing this way, and CI does it on every push.
+
+**For a run-time-width ISA, vary the width.** qemu will pretend to any of them:
+
+```bash
+qemu-aarch64-static -cpu max,sve-max-vq=1 ./build-arm64/valubench ...   # 128-bit
+qemu-aarch64-static -cpu max,sve-max-vq=3 ./build-arm64/valubench ...   # 384-bit
+```
+
+384 bits earns its place precisely because no hardware has it — 12 lanes is
+where a power-of-two assumption shows up, and 12 x 3 streams is the case that
+must decline to run rather than produce a wrong answer. Note that Linux caps a
+process at 512 bits by default and qemu emulates the cap, so `sve-max-vq=8`
+silently gives you 512 and tests nothing new; reaching 1024 or 2048 needs
+`prctl(PR_SVE_SET_VL)`.
+
+**And test the CPU that does not have the ISA at all.**
+
+```bash
+qemu-aarch64-static -cpu neoverse-n1 ./build-arm64/valubench --list
+```
+
+This is the configuration where a vector-length-agnostic build fails before it
+computes anything, so no checksum test can catch it. The dispatcher resolved
+lane counts by calling `svcntw()` on every SVE row without checking
+`available()` first — `CNTW` is an SVE instruction, and the binary died with
+SIGILL at startup on Graviton2, Ampere Altra, every Raspberry Pi and every
+Cortex-A5x/A7x. The whole suite passed, because qemu's default CPU has SVE and
+nothing ran without it.
+
+Two traps in the obvious fix, both real:
+
+- A kernel that cannot run keeps `lanes = 0`, and **AArch64 `UDIV` by zero
+  yields 0 rather than trapping**, so `768 % 0` evaluates to 768 and a group-size
+  check reports a misconfigured kernel instead of crashing. The same expression
+  on x86 is SIGFPE.
+- `HWCAP` is not always self-consistent. `-cpu max,sve=off` clears `HWCAP_SVE`
+  and leaves `HWCAP2_SVE2` set, which is impossible on real silicon since
+  FEAT_SVE2 implies FEAT_SVE. Believe the weaker claim.
 
 ## Measuring on rented hardware
 
@@ -135,6 +192,25 @@ Do it **before** starting a capture: the run decides once, during its
 environment phase, whether energy is available, so loading the driver mid-run
 does not help.
 
+**The PMU needs `perf_event_paranoid` lowered, and Ubuntu ships it at 4.**
+
+```bash
+sudo apt install -y linux-tools-common linux-tools-generic "linux-tools-$(uname -r)"
+sudo sysctl -w kernel.perf_event_paranoid=1
+perf stat -e cycles true          # confirm before the capture, not after
+```
+
+Counters work on virtualised Graviton, so this does not need bare metal. A
+phase that silently skips itself is worse than one that fails, so check the
+probe rather than the exit status of the install.
+
+**Record the compiler beside every number, in the file that holds the number.**
+Not in a sibling log. On one Graviton4 kernel gcc 13.3 and gcc 15.2 differ by
+10% at one thread and agree to within 0.3% at sixteen, which reads as a
+scaling defect until you know which compiler produced which row. This is the
+mistake that made the project's previous results file unusable, and it has been
+made twice since.
+
 **Run detached, and copy results off as they land** rather than in one transfer
 at the end. The script writes its log to disk before the terminal and tars the
 output directory on exit, including on failure, so a session survives losing the
@@ -144,6 +220,21 @@ connection — but a capture you cannot retrieve is worth nothing.
 
 C11, four-space indent, no tabs. `//` for single-line comments, `/* */` for
 multi-line blocks. Comments explain *why*; the code already says what.
+
+## Licensing
+
+BSD 3-Clause. Every source file carries an SPDX identifier and a copyright line:
+
+```c
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2026, The valubench authors. See LICENSE.
+ */
+```
+
+New files need both. Generated headers do not — they carry the notice of the
+generator that emits them. By contributing you agree your work ships under that
+licence.
 
 ## AI-assisted contributions
 
