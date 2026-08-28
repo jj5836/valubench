@@ -74,7 +74,9 @@
 #       and finds where compute overtakes *memory*. Read compressions/sec, not
 #       hash rate: the first flattens at the ceiling, the second falls by
 #       construction. Two working sets, so a cache-resident corpus cannot pass
-#       itself off as a compute ceiling.
+#       itself off as a compute ceiling; two message sizes, because the knee
+#       is compressions per byte read and blocks_per_message is half of that
+#       ratio. All three algorithms.
 #
 #   D4  Multi-device slicing, where there is more than one device. The checksum
 #       must match the single-device value exactly; a difference means the work
@@ -975,13 +977,39 @@ if [ "$NDEV" -gt 0 ]; then
     note "the answer: 'X compressions/sec sustained, once iterations exceed Y'."
     #
     # Two working sets, because a plateau at one size cannot tell a compute
-    # ceiling from a corpus that fits in cache. If the knee moves with the
-    # working set it was cache; if it does not, it is the device.
+    # ceiling from a corpus that fits in cache. 16 MiB fits an A100's 40 MiB L2
+    # and 256 MiB does not, so if the knee moves it was cache; if it does not,
+    # it is the device.
     #
-    $SW --algorithm md5 --kernel md5/ocl-s1 --transfer resident \
-        --iterations '1:8:+1,16:1024:*2' --working-set-kb 65536,262144 \
-        --csv "$OUT/d5-compute-plateau.csv" >> "$LOG" 2>&1
-    note "wrote d5-compute-plateau.csv"
+    # The ladder stops at 128 on purpose. Once compute binds, the curve is flat
+    # and further rungs add nothing -- while cost per point grows with
+    # iterations, because a single pass over the corpus cannot be subdivided.
+    # D1 learned that the expensive way: it estimated 78 s for 30 points and
+    # spent 3704, with one point killed at the timeout.
+    D5_LADDER='1:8:+1,16,32,64,128'
+    D5_WS=16384,262144
+    #
+    # Two legs, because the knee is not a property of the iteration count
+    # alone. It is compressions per byte read, and blocks_per_message is the
+    # other term: 55 bytes is one MD5 block and 64 bytes is two, since padding
+    # needs nine bytes and spills. On an A100 the 55-byte md5 ladder rose 55%
+    # from one iteration to its plateau while the 64-byte one rose 5% --
+    # already past the knee at the first point. One message size would have
+    # shown one of those and implied it was the whole story.
+    #
+    # Leg 1 finds the knee, at one block per message. SHA-512's digest is 64
+    # bytes and --iterations needs message >= digest, so it cannot appear here.
+    $SW --algorithm md5,sha1 --kernel md5/ocl-s1,sha1/ocl-s1 --transfer resident \
+        --message-bytes 55 --iterations "$D5_LADDER" --working-set-kb "$D5_WS" \
+        --csv "$OUT/d5a-knee-1block.csv" >> "$LOG" 2>&1
+    note "wrote d5a-knee-1block.csv  (the knee, where it is visible)"
+    #
+    # Leg 2 puts all three algorithms on the same footing at two blocks.
+    $SW --algorithm md5,sha1,sha512 \
+        --kernel md5/ocl-s1,sha1/ocl-s1,sha512/ocl-s1 --transfer resident \
+        --message-bytes 64 --iterations "$D5_LADDER" --working-set-kb "$D5_WS" \
+        --csv "$OUT/d5b-plateau.csv" >> "$LOG" 2>&1
+    note "wrote d5b-plateau.csv  (per-algorithm sustained rate)"
 fi
 
 # ------------------------------------------------------- D4: multi-device
