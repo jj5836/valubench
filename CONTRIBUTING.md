@@ -204,6 +204,11 @@ Counters work on virtualised Graviton, so this does not need bare metal. A
 phase that silently skips itself is worse than one that fails, so check the
 probe rather than the exit status of the install.
 
+**Emit the sweep schema, or the capture will not be readable.** `tools/sweep.py`
+writes the 39-column CSV that `tools/ingest.py` reads, with provenance on every
+row. A hand-rolled CSV is skipped at ingest, and a skipped file looks exactly
+like a capture nobody took. See [docs/results.md](docs/results.md).
+
 **Record the compiler beside every number, in the file that holds the number.**
 Not in a sibling log. On one Graviton4 kernel gcc 13.3 and gcc 15.2 differ by
 10% at one thread and agree to within 0.3% at sixteen, which reads as a
