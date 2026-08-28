@@ -30,9 +30,16 @@ _Nothing yet._
   autotune selected the kernel that wins under contention rather than the one
   that wins on the machine.
 
-  **Any autotuned multi-threaded CPU figure produced by 0.5.0 is wrong and
-  low.** Single-thread runs and runs that named `--kernel` explicitly are
-  unaffected — the narrowing needs more than one pool in a process.
+  **No released version is affected.** The defect was introduced after 0.5.0
+  was tagged, by the VB-007 pinning fix on 2026-08-25, and never appeared in a
+  release — 0.5.0 derives worker CPUs from the online count and contains no
+  `sched_getaffinity` call at all. It affects builds taken from `main` between
+  2026-08-25 and this release.
+
+  For such a build, a figure is suspect only if all three hold: it ran on the
+  CPU, with more than one thread, and let autotune pick the kernel. Naming
+  `--kernel` means one pool per process and the mask is read before the first
+  pin can narrow it.
 
   Results now carry `pinned_cpus` beside `threads_used`. The broken build
   reports `threads_used=8, pinned_cpus=1`; nothing in the old output could
