@@ -29,3 +29,6 @@ build-*/
 
 # Measured results are tracked outside the repository for now.
 RESULTS.md
+
+# Alternate build directories: make BUILD=bNN, used when comparing toolchains
+b[0-9]*/
