@@ -78,8 +78,14 @@ int main(void)
     /* One card, two providers. DRM is preferred over NVML and the card is
        counted once, not twice. */
     memset(&p, 0, sizeof p);
-    add(&p, "card0 hwmon", VB_PWR_GPU, VB_PWR_PROV_DRM,  0, 30.0);
-    add(&p, "NVML gpu0",   VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 31.0);
+    {
+        vb_power_src *a = add(&p, "card0 hwmon", VB_PWR_GPU, VB_PWR_PROV_DRM,  0, 30.0);
+        vb_power_src *b = add(&p, "NVML gpu0",   VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 31.0);
+        /* Both providers report the PCI address, which is how the same card is
+           recognised through two of them. */
+        snprintf(a->dev_id, sizeof a->dev_id, "0000:01:00.0");
+        snprintf(b->dev_id, sizeof b->dev_id, "0000:01:00.0");
+    }
     failures += check("one card seen twice is counted once",
                       vb_power_scope_joules(&p, VB_PWR_GPU), 30.0); checks++;
     failures += check("total counts that card once",
@@ -100,6 +106,60 @@ int main(void)
                       vb_power_total_joules(&p), 40.0); checks++;
 
     /* No sources at all is not zero joules, it is no answer. */
+    /*
+     * Two different cards, each visible to a different provider. Summing is
+     * correct: they are distinct devices. Deduplicating by provider -- which
+     * this did until 2026-08-28 -- reported the first and dropped the second,
+     * so an Intel iGPU beside an NVIDIA card gave 5 J against a true 255 and
+     * attributed the compute card's energy to an idle one.
+     */
+    memset(&p, 0, sizeof p);
+    add(&p, "RAPL uncore", VB_PWR_GPU, VB_PWR_PROV_RAPL, 0, 5.0);
+    add(&p, "NVML gpu0",   VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 250.0);
+    failures += check("an iGPU beside a discrete card sums",
+                      vb_power_scope_joules(&p, VB_PWR_GPU), 255.0); checks++;
+
+    memset(&p, 0, sizeof p);
+    add(&p, "card0 hwmon (AMD)", VB_PWR_GPU, VB_PWR_PROV_DRM,  0, 120.0);
+    add(&p, "NVML gpu0",         VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 250.0);
+    failures += check("two vendors' cards sum",
+                      vb_power_scope_joules(&p, VB_PWR_GPU), 370.0); checks++;
+
+    /* One card that two providers both identify. Counted once, and the
+       lower-numbered provider's figure is the one kept. */
+    memset(&p, 0, sizeof p);
+    {
+        vb_power_src *a = add(&p, "card0 hwmon", VB_PWR_GPU, VB_PWR_PROV_DRM, 0, 30.0);
+        vb_power_src *b = add(&p, "NVML gpu0",   VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 31.0);
+        snprintf(a->dev_id, sizeof a->dev_id, "0000:01:00.0");
+        snprintf(b->dev_id, sizeof b->dev_id, "0000:01:00.0");
+    }
+    failures += check("one identified card seen twice is counted once",
+                      vb_power_scope_joules(&p, VB_PWR_GPU), 30.0); checks++;
+
+    /* Same two providers, different addresses: two cards, so both count. */
+    memset(&p, 0, sizeof p);
+    {
+        vb_power_src *a = add(&p, "card0 hwmon", VB_PWR_GPU, VB_PWR_PROV_DRM, 0, 30.0);
+        vb_power_src *b = add(&p, "NVML gpu0",   VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 31.0);
+        snprintf(a->dev_id, sizeof a->dev_id, "0000:01:00.0");
+        snprintf(b->dev_id, sizeof b->dev_id, "0000:41:00.0");
+    }
+    failures += check("two identified cards both count",
+                      vb_power_scope_joules(&p, VB_PWR_GPU), 61.0); checks++;
+
+    /*
+     * Neither source identifies itself. Summing is the deliberate choice: if
+     * they are two devices the sum is right, and if they are one it overstates
+     * by at most 2x -- where dropping one understates by everything that
+     * device was doing. Erring toward the smaller error.
+     */
+    memset(&p, 0, sizeof p);
+    add(&p, "unknown A", VB_PWR_GPU, VB_PWR_PROV_DRM,  0, 30.0);
+    add(&p, "unknown B", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 31.0);
+    failures += check("unidentified sources sum rather than drop one",
+                      vb_power_scope_joules(&p, VB_PWR_GPU), 61.0); checks++;
+
     memset(&p, 0, sizeof p);
     failures += check("nothing reports -1",
                       vb_power_total_joules(&p), -1.0); checks++;

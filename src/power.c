@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -40,6 +41,7 @@ typedef int (*nvml_fn_name)(void *, char *, unsigned);
 typedef int (*nvml_fn_clock)(void *, int, unsigned *);
 typedef int (*nvml_fn_temp)(void *, int, unsigned *);
 typedef int (*nvml_fn_throttle)(void *, unsigned long long *);
+typedef int (*nvml_fn_pciinfo)(void *, void *);
 
 /* NVML enum members used by name rather than by including nvml.h, which is
    not a build dependency: the library is dlopen'd. */
@@ -58,6 +60,7 @@ static struct {
     nvml_fn_clock    Clock;
     nvml_fn_temp     Temp;
     nvml_fn_throttle Throttle;
+    nvml_fn_pciinfo  PciInfo;
     void *dev[VB_POWER_MAX_SRC];
     int   n_dev;
 } g_nvml;
@@ -103,6 +106,19 @@ static int nvml_start(void)
     *(void **) (&g_nvml.Temp)   = dlsym(g_nvml.lib, "nvmlDeviceGetTemperature");
     *(void **) (&g_nvml.Throttle) =
         dlsym(g_nvml.lib, "nvmlDeviceGetCurrentClocksThrottleReasons");
+    /*
+     * The PCI address, which is what lets a card be recognised as the same
+     * device another provider also sees. nvmlPciInfo_t has grown across
+     * versions by appending, so its first member -- char busIdLegacy[16],
+     * "0000:01:00.0" -- has been at offset 0 throughout. A generously sized
+     * zeroed buffer and a read of that first field is version-independent
+     * where naming the struct would not be.
+     */
+    *(void **) (&g_nvml.PciInfo) = dlsym(g_nvml.lib, "nvmlDeviceGetPciInfo_v3");
+    if (!g_nvml.PciInfo)
+        *(void **) (&g_nvml.PciInfo) = dlsym(g_nvml.lib, "nvmlDeviceGetPciInfo_v2");
+    if (!g_nvml.PciInfo)
+        *(void **) (&g_nvml.PciInfo) = dlsym(g_nvml.lib, "nvmlDeviceGetPciInfo");
     if (!g_nvml.Throttle)   /* renamed in newer NVML headers */
         *(void **) (&g_nvml.Throttle) =
             dlsym(g_nvml.lib, "nvmlDeviceGetCurrentClocksEventReasons");
@@ -271,6 +287,30 @@ static void scan_drm_hwmon(vb_power *p)
         if (strchr(ce->d_name, '-'))
             continue;
 
+        /*
+         * The card's PCI address, which is what makes a device identifiable
+         * across providers: /sys/class/drm/cardN/device is a symlink into the
+         * PCI tree and its final component is the address. NVML sources carry
+         * no id, so they are never deduplicated -- summing an NVIDIA card that
+         * some other provider also sees would overstate by at most 2x, where
+         * dropping it understates by everything it was doing.
+         */
+        char link[PATH_MAX], devid[32] = "";
+        ssize_t ln;
+
+        snprintf(base, sizeof base, "/sys/class/drm/%s/device", ce->d_name);
+        ln = readlink(base, link, sizeof link - 1);
+        if (ln > 0) {
+            const char *slash;
+            link[ln] = '\0';
+            slash = strrchr(link, '/');
+            /* A PCI address is 12 characters; anything longer is not one, and
+               a silent truncation would invent a device id that matches. */
+            const char *tail = slash ? slash + 1 : link;
+            if (strlen(tail) < sizeof devid)
+                snprintf(devid, sizeof devid, "%s", tail);
+        }
+
         snprintf(base, sizeof base, "/sys/class/drm/%s/device/hwmon",
                  ce->d_name);
         d = opendir(base);
@@ -309,6 +349,7 @@ static void scan_drm_hwmon(vb_power *p)
             s->fd = fd;
             s->scope = VB_PWR_GPU;
             s->provider = VB_PWR_PROV_DRM;
+            snprintf(s->dev_id, sizeof s->dev_id, "%s", devid);
             snprintf(s->name, sizeof s->name, "card%d %s%s", card,
                      hname[0] ? hname : "hwmon",
                      kind == SRC_HWMON_POWER ? " (avg power)" : "");
@@ -346,6 +387,17 @@ static void scan_nvml(vb_power *p)
         g_nvml.dev[i] = h;
         if ((int) i + 1 > g_nvml.n_dev)
             g_nvml.n_dev = (int) i + 1;
+
+        if (g_nvml.PciInfo) {
+            unsigned char info[256];
+            memset(info, 0, sizeof info);
+            if (g_nvml.PciInfo(h, info) == 0) {
+                info[15] = '\0';                /* busIdLegacy is char[16] */
+                if (info[0])
+                    snprintf(s->dev_id, sizeof s->dev_id, "%s",
+                             (const char *) info);
+            }
+        }
 
         char nm[80] = "";
         if (g_nvml.Name)
@@ -491,39 +543,58 @@ void vb_power_end(vb_power *p, double seconds)
  * did not follow: it summed every valid source instead. An NVIDIA card visible
  * through both DRM and NVML was therefore counted twice.
  */
-static vb_power_provider scope_provider(const vb_power *p,
-                                        vb_power_scope scope, int *found)
+/*
+ * Is source `i` a duplicate of an earlier source for the same device?
+ *
+ * Only a matching, non-empty device id makes a duplicate. An earlier version
+ * deduplicated by *provider* -- one provider won a scope and the rest were
+ * discarded -- which is right when two providers see one card and badly wrong
+ * when they see two. An Intel iGPU visible through RAPL uncore beside an
+ * NVIDIA card visible through NVML reported the iGPU's 5 J and dropped the
+ * card's 250: the compute device's energy attributed to an idle one, a 50x
+ * understatement in an ordinary desktop configuration.
+ *
+ * Where two sources do name the same device, the lower-numbered provider wins,
+ * which is the preference order the header documents.
+ */
+static int duplicate_of_earlier(const vb_power *p, int i, vb_power_scope scope)
 {
-    vb_power_provider best = VB_PWR_PROV_RAPL;
-    *found = 0;
-    for (int i = 0; i < p->n; i++) {
-        if (p->src[i].scope != scope || !p->src[i].valid)
+    const vb_power_src *s = &p->src[i];
+
+    if (!s->dev_id[0])
+        return 0;                   /* unidentified: taken at face value */
+
+    for (int j = 0; j < p->n; j++) {
+        const vb_power_src *o = &p->src[j];
+
+        if (j == i || o->scope != scope || !o->valid || !o->dev_id[0])
             continue;
-        if (!*found || p->src[i].provider < best)
-            best = p->src[i].provider;
-        *found = 1;
+        if (strcmp(o->dev_id, s->dev_id) != 0)
+            continue;
+        if (o->provider < s->provider ||
+            (o->provider == s->provider && j < i))
+            return 1;
     }
-    return best;
+    return 0;
 }
 
 double vb_power_scope_joules(const vb_power *p, vb_power_scope scope)
 {
-    int found = 0;
-    vb_power_provider prov = scope_provider(p, scope, &found);
     double total = 0.0;
+    int found = 0;
 
-    if (!found)
-        return -1.0;
-
-    /* Sum within the chosen provider only. Two sockets legitimately report two
-       packages, and two cards two GPUs; what must not happen is one device
+    /* Sum every distinct device in the scope. Two sockets legitimately report
+       two packages and two cards two GPUs; what must not happen is one device
        counted once per provider that can see it. */
-    for (int i = 0; i < p->n; i++)
-        if (p->src[i].scope == scope && p->src[i].valid &&
-            p->src[i].provider == prov)
-            total += p->src[i].joules;
-
-    return total;
+    for (int i = 0; i < p->n; i++) {
+        if (p->src[i].scope != scope || !p->src[i].valid)
+            continue;
+        if (duplicate_of_earlier(p, i, scope))
+            continue;
+        total += p->src[i].joules;
+        found = 1;
+    }
+    return found ? total : -1.0;
 }
 
 double vb_power_total_joules(const vb_power *p)
@@ -537,16 +608,15 @@ double vb_power_total_joules(const vb_power *p)
 
     for (size_t si = 0; si < sizeof scopes / sizeof scopes[0]; si++) {
         vb_power_scope sc = scopes[si];
-        int found = 0;
-        vb_power_provider prov = scope_provider(p, sc, &found);
-        if (!found)
-            continue;
+
         for (int i = 0; i < p->n; i++) {
             const vb_power_src *s = &p->src[i];
             /* Contained domains are inside another scope's figure, and
                VB_PWR_CPU_CORES is inside the package. Neither is added. */
-            if (s->scope != sc || !s->valid || s->provider != prov ||
+            if (s->scope != sc || !s->valid ||
                 s->contained || sc == VB_PWR_CPU_CORES)
+                continue;
+            if (duplicate_of_earlier(p, i, sc))
                 continue;
             total += s->joules;
             any = 1;

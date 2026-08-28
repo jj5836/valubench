@@ -5,7 +5,25 @@ outside this repository while a durable format for them is decided.
 
 ## Unreleased
 
-_Nothing yet._
+### Fixed
+
+- **Two GPUs from different vendors: one was silently dropped.** VB-004 stopped
+  a card being counted twice by picking one energy provider per scope and
+  discarding the rest. That is right when two providers see one card and wrong
+  when they see two: an Intel iGPU through RAPL uncore beside an NVIDIA card
+  through NVML reported **5 J against a true 255**, attributing the compute
+  card energy to an idle one, in an ordinary desktop configuration. An AMD card
+  beside an NVIDIA card lost the NVIDIA one the same way.
+
+  Deduplication now keys on the device rather than the provider, using the PCI
+  address -- from the sysfs symlink for DRM sources, from NVML busIdLegacy for
+  NVIDIA ones. Sources that do not identify themselves are summed rather than
+  dropped: if they are two devices the sum is right, and if they are one it
+  overstates by at most 2x, where dropping understates by everything that
+  device was doing.
+
+  No captured result is affected. Every machine measured so far has had exactly
+  one GPU energy provider, and the fault needs two.
 
 ## 0.6.0 — 2026-08-28
 

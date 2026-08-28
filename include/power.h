@@ -71,6 +71,20 @@ typedef struct {
      */
     int            contained;
 
+    /*
+     * Which physical device this reading is for, as a PCI address, or "" when
+     * the provider does not say.
+     *
+     * Deduplication keys on this and nothing else. Two sources naming the same
+     * device are one device and are counted once; two sources naming different
+     * devices, or either one unidentified, are summed. Preferring the sum is
+     * deliberate: counting a card twice overstates by at most 2x, while
+     * dropping one understates by however much that card was doing -- an Intel
+     * iGPU beside an NVIDIA card reported 5 J against a true 255 before this,
+     * attributing the compute card's energy to an idle one.
+     */
+    char     dev_id[32];
+
     /* Implementation detail; see power.c. */
     int      kind;
     int      fd;
