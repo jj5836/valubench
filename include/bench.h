@@ -107,6 +107,7 @@ typedef struct {
 
     /* Pinning was requested and at least one worker was refused its CPU. */
     int      pin_failed;
+    unsigned pinned_cpus;       /* distinct CPUs the workers ran on; 0 if unpinned */
 
     vb_power power;             /* energy over the timed region */
     vb_gpu_clocks gpu_clocks;   /* SM clock across the timed region, NVML only */

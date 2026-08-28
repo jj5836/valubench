@@ -230,7 +230,8 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
             si->has_sse2 ? "true" : "false",
             si->has_avx2 ? "true" : "false",
             si->has_avx512f ? "true" : "false");
-    fprintf(f, "    \"threads_used\": %u\n", r->threads);
+    fprintf(f, "    \"threads_used\": %u,\n", r->threads);
+    fprintf(f, "    \"pinned_cpus\": %u\n", r->pinned_cpus);
     fprintf(f, "  },\n");
 
     fprintf(f, "  \"energy\": {\n");

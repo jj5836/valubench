@@ -258,6 +258,7 @@ struct vb_pool {
     /* Set by any worker whose requested CPU was refused. Reported, because a
        run that could not pin is not the run that was asked for. */
     int               pin_failed;
+    unsigned          pinned_cpus;   /* distinct CPUs the workers were pinned to */
     pthread_barrier_t start_bar;
     pthread_barrier_t done_bar;
 };
@@ -427,6 +428,27 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
         w->ref_message_bytes = cfg->message_bytes;
         w->ref_iterations    = cfg->iterations;
         off += w->groups;
+    }
+
+    /*
+     * How many distinct CPUs this pool actually spread over.
+     *
+     * Recorded because the failure it catches is invisible otherwise. When
+     * vb_allowed_cpus() was re-read per pool, autotune's first probe narrowed
+     * the calling thread's mask to one CPU and every pool after it put all of
+     * its workers there -- while still reporting the thread count it was asked
+     * for. The result was 2.9x slow on four cores, verified, and carried no
+     * warning, because pinning to a CPU you already occupy always succeeds.
+     * threads_used=8 with pinned_cpus=1 now says so on the face of the result.
+     */
+    if (cfg->pin_cpu) {
+        for (unsigned i = 0; i < threads; i++) {
+            unsigned j = 0;
+            while (j < i && p->w[j].cpu != p->w[i].cpu)
+                j++;
+            if (j == i)
+                p->pinned_cpus++;
+        }
     }
 
     /* Worker 0 is the driving thread, so only threads-1 are spawned and the
@@ -1018,6 +1040,7 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     pool_ready = 1;
     out->threads = pool.n;
     out->pin_failed = pool.pin_failed;
+    out->pinned_cpus = pool.pinned_cpus;
 
     uint64_t reps = calibrate_reps(&pool, cfg->target_ms);
     if (reps == 0) {

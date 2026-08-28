@@ -5,7 +5,85 @@ outside this repository while a durable format for them is decided.
 
 ## Unreleased
 
+_Nothing yet._
+
+## 0.6.0 — 2026-08-28
+
 ### Fixed
+
+- **Autotune pinned every worker to one core, under-reporting by up to 3.4x.**
+  `pool_create()` pins worker 0 by calling `pthread_setaffinity_np` on the
+  calling thread, and never restores it. `vb_allowed_cpus()` then read the mask
+  back with `sched_getaffinity(0, ...)`, which reports the *calling thread's*
+  mask rather than the process's. Autotune builds one pool per candidate kernel
+  on that same thread, so the first probe narrowed the mask to a single CPU and
+  every pool after it — including the one behind the reported result — put all
+  of its workers there.
+
+  Nothing gave it away. `threads_used` still reported the count that was asked
+  for, and no pin failure was raised, because pinning to a CPU you already
+  occupy always succeeds. Measured at 2.9x slow on four cores and 3.4x on
+  eight, and confirmed with `ps -L`: every thread on PSR 0 before the fix,
+  spread across all CPUs after.
+
+  It also chose the wrong kernel. Every candidate was ranked on one core, so
+  autotune selected the kernel that wins under contention rather than the one
+  that wins on the machine.
+
+  **Any autotuned multi-threaded CPU figure produced by 0.5.0 is wrong and
+  low.** Single-thread runs and runs that named `--kernel` explicitly are
+  unaffected — the narrowing needs more than one pool in a process.
+
+  Results now carry `pinned_cpus` beside `threads_used`. The broken build
+  reports `threads_used=8, pinned_cpus=1`; nothing in the old output could
+  express that, which is how this passed review, CI, and five hardware
+  sessions.
+
+- **The binary died at startup on every AArch64 CPU without SVE.** The registry
+  resolved lane counts by calling each kernel's `lanes_fn` with no
+  `available()` check, and for SVE rows that function is a bare `CNTW` — an SVE
+  instruction, UNDEF without the feature. SIGILL on Graviton2, Ampere Altra,
+  every Raspberry Pi and every Cortex-A5x/A7x, before computing anything.
+
+  Four parts, because guarding the call alone trades a crash for a lie:
+  `resolve_lanes()` consults `available()`; `vb_batch_divides()` returns 0 for a
+  zero group size, since AArch64 `UDIV` by zero yields 0 rather than trapping
+  and `768 % 0` evaluated to 768; the structural test skips rows whose width
+  needs an absent ISA; and `vb_cpu_has_sve2()` now requires SVE, because qemu's
+  `-cpu max,sve=off` clears `HWCAP_SVE` while leaving `HWCAP2_SVE2` set and
+  that reached `CNTW` by a separate path.
+
+  CI now runs the binary on `neoverse-n1`, `cortex-a72`, `cortex-a53` and
+  `max,sve=off`, and asserts the SVE rows stay registered-but-unavailable so a
+  build that dropped them cannot pass by testing nothing.
+
+- **Multi-block messages were corrupted on SVE.** An unbraced `if (b == 0)`
+  guarded one of five macro-expanded statements. Invisible at the default
+  55-byte message, which is a single block; found on real hardware at 112 of
+  1032 checks.
+
+- **Sixteen findings from an independent review**, four of which were verified
+  against the code before being accepted and two of which were materially worse
+  than filed. A degraded thread pool reported **176 MH/s against a true 43** and
+  marked it verified, because slices were sized before any thread started while
+  `hashes_per_iter` counted the whole corpus; pools are now all-or-nothing
+  behind a start gate. An energy total counted Intel's `uncore` domain twice,
+  understating hashes/joule by 15% on client parts.
+
+- **`make check` failed on any SVE machine whose vector length is not a power
+  of two** — 12 failures at 384 bits, blaming kernels that were correct. A
+  run-time lane count that does not tile the batch is a property of the machine;
+  a fixed-width one that does not is a defect, and only the second now fails.
+
+- **A hang counted as a passing test.** `check-threadfail` asserted that a
+  degraded pool never reports a result, with no time bound — and removing the
+  start gate to verify that assertion deadlocks rather than returning a wrong
+  number. Two such waits sat on a development machine for 9 and 23 hours. Each
+  fault injection is now bounded.
+
+- **A guard that found nothing passed.** The scalar-purity check reported
+  success while inspecting zero kernels, and immediately caught a real
+  `OBJDUMP` derivation bug once it was made to fail on an empty set.
 
 - **SHA-512 reported half its working set.** The result path computed corpus
   size with a hardcoded 64-byte block, which is right for MD5 and SHA-1 and half
@@ -16,19 +94,16 @@ outside this repository while a durable format for them is decided.
   algorithm, and `make check` verifies the reported figure against
   `batch_messages x blocks x block_bytes` for every algorithm at each padding
   boundary.
-
   A second, correct implementation of the same arithmetic existed in
   `vb_working_set_bytes()` and had no callers, which is how the two could
   disagree unnoticed; it has been removed rather than wired up, because the
   reported figure should describe the corpus that was built rather than one
   recomputed from the request.
-
   **Comparing SHA-512 results across this fix**: `tools/compare.py` treats
   working set as part of a measurement's identity, so a pre-fix SHA-512 row will
   not pair with a post-fix one even when the runs were otherwise identical. That
   is the tool being right — the two labels genuinely differ — but it means
   archived SHA-512 comparisons need the older side's figure doubled first.
-
 - **The scalar kernel was not scalar.** At `-O2`, GCC's SLP vectoriser fused the
   independent streams and emitted SSE2 on x86-64 and NEON on AArch64 — 88% and
   79% of the two-stream kernel's instructions — while clang did not, so the
@@ -37,6 +112,55 @@ outside this repository while a durable format for them is decided.
   `make check` disassembles the result and fails if more than 5% of its
   instructions touch a vector register. Any scalar figure measured before this
   is not a scalar baseline and must not be used as a denominator.
+
+### Added
+
+- **SVE and SVE2 kernels, vector-length agnostic.** One binary correct at 128,
+  256, 384, 512, 1024 and 2048-bit vector lengths, verified at every one. SVE
+  types are sizeless and cannot go in the arrays the shared templates use, so
+  the templates gained hooks whose defaults are the original code — the x86
+  objects are byte-identical with and without them, checked per symbol.
+
+  SVE-256 beats NEON-128 on Neoverse V1 by 1.12-1.20x *with a compiler that can
+  generate it*; gcc 13 and 14 emit as many instructions for eight lanes as NEON
+  needs for four, which is a code-generation defect fixed in gcc 15. The
+  toolchain is worth up to 4.15x on the same silicon — more than any
+  architectural difference this project has measured.
+
+- **GPU clock, temperature and throttle-reason telemetry**, sampled across the
+  timed region and reported as first/last/min/max. NVML only; parts without it
+  report nothing rather than zero. This is what the word *sustained* rests on:
+  every device figure before it was potentially a boost-clock number, and no
+  sustain mode was needed because `--warmup-ms` already accepts up to an hour.
+
+- **Stream counts beyond four** — 6 and 8 — which MD5 wanted, and which are
+  worth 26-36% on Neoverse V2.
+
+- **`pinned_cpus` in every result**, so a pool confined to fewer cores than it
+  claims says so on the face of the output.
+
+- **CI gained teeth**: an ASan/UBSan job, a software-OpenCL job, SVE at four
+  vector lengths under emulation with a deliberate non-power-of-two width, a
+  multi-block sweep against the scalar reference, an objdump assertion that the
+  SVE units contain SVE, and the non-SVE AArch64 startup check above.
+
+- **`run.sh` gained D5**, the resident iteration ladder: where compute overtakes
+  *memory*, as distinct from D1's where it overtakes the link. Two message sizes,
+  because the knee is compressions per byte read and `blocks_per_message` is the
+  other half of that ratio.
+
+### Changed
+
+- **Relicensed to BSD 3-Clause**, with SPDX identifiers on every source file.
+- **Measured results moved out of the repository.** `RESULTS.md` worked for one
+  machine and stopped working at five: numbers outlived their provenance, and
+  nothing was machine-checkable.
+- **The iteration ladder is solved in one pass** rather than once per rung,
+  which took reference computation from dominating a crossover session to
+  disappearing into it.
+- **`tools/isa_cost.py` no longer claims to predict throughput.** It supplies
+  instructions per hash; throughput is that times IPC, and its predictions were
+  wrong in both directions.
 
 ## 0.5.0 — 2026-08-23
 
