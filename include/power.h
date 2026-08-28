@@ -35,6 +35,7 @@
 #define VALUBENCH_POWER_H
 
 #include <stdint.h>
+#include <stddef.h>   /* size_t, for vb_gpu_throttle_str */
 
 #define VB_POWER_MAX_SRC 16
 
@@ -108,6 +109,46 @@ void vb_power_end(vb_power *p, double seconds);
 
 /* Total joules for a scope across all sources, or -1 if none measured it. */
 double vb_power_scope_joules(const vb_power *p, vb_power_scope scope);
+
+/*
+ * GPU clock telemetry, which is what the word "sustained" rests on.
+ *
+ * A GPU answers a short benchmark at its boost clock and a long one at
+ * whatever thermals and the power limit leave it, and the throughput figure
+ * alone cannot tell you which you got. Sampling the SM clock across the timed
+ * region turns that from an invisible assumption into a reported range, and
+ * NVML's throttle mask says *why* a clock fell -- power cap, thermal, or
+ * hardware brake -- which a clock number on its own does not.
+ *
+ * NVML only. There is no portable equivalent, so this reports nothing on AMD
+ * and Intel parts rather than guessing.
+ */
+
+/* NVML's nvmlClocksThrottleReason bits, for the ones worth naming. */
+#define VB_GPU_THROTTLE_POWER      0x00000004ull   /* SW power cap */
+#define VB_GPU_THROTTLE_HW_SLOW    0x00000008ull
+#define VB_GPU_THROTTLE_SW_THERMAL 0x00000020ull
+#define VB_GPU_THROTTLE_HW_THERMAL 0x00000040ull
+#define VB_GPU_THROTTLE_HW_BRAKE   0x00000080ull
+
+typedef struct {
+    int      valid;          /* 0 when no NVML device answered */
+    int      n_samples;
+    int      n_devices;
+    unsigned sm_mhz_first, sm_mhz_last, sm_mhz_min, sm_mhz_max;
+    int      temp_c_first, temp_c_last, temp_c_max;   /* -1 if unavailable */
+    uint64_t throttle_seen;  /* OR over every sample of every device */
+} vb_gpu_clocks;
+
+/* Zero the aggregate and note how many NVML devices will be sampled. */
+void vb_gpu_clocks_reset(vb_gpu_clocks *g);
+
+/* One sample of every NVML device. Cheap enough to call per timed iteration;
+   silently does nothing when NVML is absent. */
+void vb_gpu_clocks_sample(vb_gpu_clocks *g);
+
+/* Human-readable throttle reasons into `buf`, or "none". Returns buf. */
+const char *vb_gpu_throttle_str(uint64_t mask, char *buf, size_t n);
 
 /*
  * Energy over the whole machine for the run: every non-contained domain, one

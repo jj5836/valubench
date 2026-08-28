@@ -186,6 +186,25 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
                         r->compute_transfer_ratio >= 1.0 ? "compute"
                                                          : "transfer", ",");
         }
+        if (r->gpu_clocks.valid) {
+            char why[128];
+            fprintf(f, "    \"gpu_clock_mhz\": {\n");
+            fprintf(f, "      \"first\": %u,\n", r->gpu_clocks.sm_mhz_first);
+            fprintf(f, "      \"last\": %u,\n",  r->gpu_clocks.sm_mhz_last);
+            fprintf(f, "      \"min\": %u,\n",   r->gpu_clocks.sm_mhz_min);
+            fprintf(f, "      \"max\": %u,\n",   r->gpu_clocks.sm_mhz_max);
+            fprintf(f, "      \"samples\": %d\n", r->gpu_clocks.n_samples);
+            fprintf(f, "    },\n");
+            if (r->gpu_clocks.temp_c_max >= 0) {
+                fprintf(f, "    \"gpu_temp_c\": { \"first\": %d, \"last\": %d, "
+                        "\"max\": %d },\n",
+                        r->gpu_clocks.temp_c_first, r->gpu_clocks.temp_c_last,
+                        r->gpu_clocks.temp_c_max);
+            }
+            json_kv_str(f, "gpu_throttle_reasons",
+                        vb_gpu_throttle_str(r->gpu_clocks.throttle_seen,
+                                            why, sizeof why), ",");
+        }
         fprintf(f, "    \"device_count\": %d\n", r->device_count);
         fprintf(f, "  },\n");
     }

@@ -854,8 +854,15 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     uint64_t kernel_ns = 0, transfer_ns = 0;
     vb_power_begin(&out->power);
 
+    /* Sampled per timed iteration, which is the granularity that matters: a
+       clock that falls between the first sample and the last is the difference
+       between a boost figure and a sustained one. Warm-up is deliberately
+       excluded -- the question is what the *measured* region ran at. */
+    vb_gpu_clocks_reset(&out->gpu_clocks);
+
     for (unsigned si = 0; si < n_samples; si++) {
         uint64_t t0 = vb_now_ns();
+        vb_gpu_clocks_sample(&out->gpu_clocks);
         for (uint64_t r = 0; r < reps; r++) {
             memset(got, 0, sizeof got);
             VB_DEV_PASS(fail_run);
@@ -878,6 +885,7 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
             transfer_ns += slowest_xfer;
         }
         double sec = (double) (vb_now_ns() - t0) / 1e9;
+        vb_gpu_clocks_sample(&out->gpu_clocks);
         out->sample_hps[si] = (double) out->hashes_per_iter / sec;
         out->total_seconds += sec;
         out->total_hashes += out->hashes_per_iter;

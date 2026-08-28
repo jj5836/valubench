@@ -104,6 +104,43 @@ int main(void)
     failures += check("nothing reports -1",
                       vb_power_total_joules(&p), -1.0); checks++;
 
+    /*
+     * GPU clock telemetry. The aggregation itself needs an NVIDIA card, but
+     * the two things that decide whether a report is readable do not: an
+     * unsampled aggregate must not look like a measurement of zero, and the
+     * throttle mask must name every reason it saw.
+     */
+    vb_gpu_clocks g;
+    vb_gpu_clocks_reset(&g);
+    failures += check("unsampled clocks are invalid, not zero",
+                      (double) g.valid, 0.0); checks++;
+    failures += check("unsampled temperature is -1, not 0",
+                      (double) g.temp_c_max, -1.0); checks++;
+    vb_gpu_clocks_sample(&g);       /* no NVML here: must stay silent */
+    failures += check("sampling without NVML records nothing",
+                      (double) g.n_samples, 0.0); checks++;
+
+    char why[128];
+    failures += check("no throttle reasons reads as none",
+                      (double) !strcmp(vb_gpu_throttle_str(0, why, sizeof why),
+                                       "none"), 1.0); checks++;
+    failures += check("a power cap is named",
+                      (double) !strcmp(vb_gpu_throttle_str(
+                          VB_GPU_THROTTLE_POWER, why, sizeof why),
+                          "power-cap"), 1.0); checks++;
+    failures += check("two reasons are both named",
+                      (double) !strcmp(vb_gpu_throttle_str(
+                          VB_GPU_THROTTLE_POWER | VB_GPU_THROTTLE_HW_THERMAL,
+                          why, sizeof why), "power-cap,hw-thermal"), 1.0);
+    checks++;
+    /* An unknown bit must not silently read as "none" alongside a known one,
+       and must not run off the end of a short buffer. */
+    char tiny[6];
+    vb_gpu_throttle_str(VB_GPU_THROTTLE_POWER | VB_GPU_THROTTLE_HW_BRAKE,
+                        tiny, sizeof tiny);
+    failures += check("a short buffer stays terminated",
+                      (double) (strlen(tiny) < sizeof tiny), 1.0); checks++;
+
     printf("%d power-model checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

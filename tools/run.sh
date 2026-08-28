@@ -69,6 +69,13 @@
 #
 #   D3  Working set on the device, the memory axis.
 #
+#   D5  The compute plateau, resident. D1 puts the link in the timed region and
+#       finds where compute overtakes it; this leaves the corpus on the device
+#       and finds where compute overtakes *memory*. Read compressions/sec, not
+#       hash rate: the first flattens at the ceiling, the second falls by
+#       construction. Two working sets, so a cache-resident corpus cannot pass
+#       itself off as a compute ceiling.
+#
 #   D4  Multi-device slicing, where there is more than one device. The checksum
 #       must match the single-device value exactly; a difference means the work
 #       split is wrong, not that the machine is fast.
@@ -952,6 +959,29 @@ if [ "$NDEV" -gt 0 ]; then
     $SW --algorithm md5 --kernel md5/ocl-s1 --transfer resident \
         --working-set-kb "$WS_AXIS" --csv "$OUT/d3-workingset.csv" >> "$LOG" 2>&1
     note "wrote d3-workingset.csv"
+fi
+
+# ------------------------------------------- D5: the compute plateau, resident
+
+if [ "$NDEV" -gt 0 ]; then
+    say "D5  iteration ladder, resident (where the device stops being bandwidth-bound)"
+    note "D1 sweeps iterations with the transfer inside the timed region, which"
+    note "answers where compute overtakes the link. This asks a different"
+    note "question: with the corpus already resident, how much compute per byte"
+    note "does the device need before it stops being fed by memory?"
+    note "Hash rate falls monotonically here by construction -- one hash is N"
+    note "chained hashes -- so the figure to read is compressions/sec, which"
+    note "climbs while memory binds and flattens once compute does. The knee is"
+    note "the answer: 'X compressions/sec sustained, once iterations exceed Y'."
+    #
+    # Two working sets, because a plateau at one size cannot tell a compute
+    # ceiling from a corpus that fits in cache. If the knee moves with the
+    # working set it was cache; if it does not, it is the device.
+    #
+    $SW --algorithm md5 --kernel md5/ocl-s1 --transfer resident \
+        --iterations '1:8:+1,16:1024:*2' --working-set-kb 65536,262144 \
+        --csv "$OUT/d5-compute-plateau.csv" >> "$LOG" 2>&1
+    note "wrote d5-compute-plateau.csv"
 fi
 
 # ------------------------------------------------------- D4: multi-device

@@ -109,6 +109,7 @@ typedef struct {
     int      pin_failed;
 
     vb_power power;             /* energy over the timed region */
+    vb_gpu_clocks gpu_clocks;   /* SM clock across the timed region, NVML only */
 } vb_result;
 
 /*

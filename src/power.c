@@ -37,6 +37,14 @@ typedef int (*nvml_fn_handle)(unsigned, void **);
 typedef int (*nvml_fn_energy)(void *, unsigned long long *);
 typedef int (*nvml_fn_power)(void *, unsigned *);
 typedef int (*nvml_fn_name)(void *, char *, unsigned);
+typedef int (*nvml_fn_clock)(void *, int, unsigned *);
+typedef int (*nvml_fn_temp)(void *, int, unsigned *);
+typedef int (*nvml_fn_throttle)(void *, unsigned long long *);
+
+/* NVML enum members used by name rather than by including nvml.h, which is
+   not a build dependency: the library is dlopen'd. */
+#define VB_NVML_CLOCK_SM        1
+#define VB_NVML_TEMPERATURE_GPU 0
 
 static struct {
     void *lib;
@@ -47,7 +55,11 @@ static struct {
     nvml_fn_energy   Energy;
     nvml_fn_power    Power;
     nvml_fn_name     Name;
+    nvml_fn_clock    Clock;
+    nvml_fn_temp     Temp;
+    nvml_fn_throttle Throttle;
     void *dev[VB_POWER_MAX_SRC];
+    int   n_dev;
 } g_nvml;
 
 static int nvml_start(void)
@@ -84,6 +96,16 @@ static int nvml_start(void)
                                         "nvmlDeviceGetTotalEnergyConsumption");
     *(void **) (&g_nvml.Power)  = dlsym(g_nvml.lib, "nvmlDeviceGetPowerUsage");
     *(void **) (&g_nvml.Name)   = dlsym(g_nvml.lib, "nvmlDeviceGetName");
+
+    /* Telemetry. Optional even when NVML loads: a driver may decline any of
+       them, and a missing clock is reported as absent rather than as zero. */
+    *(void **) (&g_nvml.Clock)  = dlsym(g_nvml.lib, "nvmlDeviceGetClockInfo");
+    *(void **) (&g_nvml.Temp)   = dlsym(g_nvml.lib, "nvmlDeviceGetTemperature");
+    *(void **) (&g_nvml.Throttle) =
+        dlsym(g_nvml.lib, "nvmlDeviceGetCurrentClocksThrottleReasons");
+    if (!g_nvml.Throttle)   /* renamed in newer NVML headers */
+        *(void **) (&g_nvml.Throttle) =
+            dlsym(g_nvml.lib, "nvmlDeviceGetCurrentClocksEventReasons");
 
     if (!init || !g_nvml.Count || !g_nvml.Handle || init() != 0)
         return 0;
@@ -322,6 +344,8 @@ static void scan_nvml(vb_power *p)
         s->provider = VB_PWR_PROV_NVML;
         s->nvml_index = i;
         g_nvml.dev[i] = h;
+        if ((int) i + 1 > g_nvml.n_dev)
+            g_nvml.n_dev = (int) i + 1;
 
         char nm[80] = "";
         if (g_nvml.Name)
@@ -539,4 +563,96 @@ const char *vb_power_scope_name(vb_power_scope s)
     case VB_PWR_GPU:         return "gpu";
     default:                 return "other";
     }
+}
+
+
+/* ---- GPU clock telemetry ------------------------------------------------ */
+
+void vb_gpu_clocks_reset(vb_gpu_clocks *g)
+{
+    memset(g, 0, sizeof *g);
+    g->temp_c_first = g->temp_c_last = g->temp_c_max = -1;
+    /* Only meaningful once NVML is up, which vb_power_open() does. Sampling
+       before that simply records nothing. */
+    g->n_devices = g_nvml.ready ? g_nvml.n_dev : 0;
+}
+
+void vb_gpu_clocks_sample(vb_gpu_clocks *g)
+{
+    if (!g_nvml.ready || !g_nvml.Clock || g_nvml.n_dev <= 0)
+        return;
+
+    unsigned sm_hi = 0;
+    int      temp_hi = -1;
+    int      got = 0;
+
+    for (int i = 0; i < g_nvml.n_dev; i++) {
+        void *h = g_nvml.dev[i];
+        unsigned mhz = 0;
+
+        if (!h || g_nvml.Clock(h, VB_NVML_CLOCK_SM, &mhz) != 0 || mhz == 0)
+            continue;
+        got = 1;
+        if (mhz > sm_hi)
+            sm_hi = mhz;
+
+        unsigned t = 0;
+        if (g_nvml.Temp &&
+            g_nvml.Temp(h, VB_NVML_TEMPERATURE_GPU, &t) == 0 && (int) t > temp_hi)
+            temp_hi = (int) t;
+
+        unsigned long long why = 0;
+        if (g_nvml.Throttle && g_nvml.Throttle(h, &why) == 0)
+            g->throttle_seen |= (uint64_t) why;
+    }
+
+    if (!got)
+        return;
+
+    /*
+     * The busiest device in the set, not the average: a run is only as
+     * sustained as the part doing the work, and averaging a loaded card with
+     * an idle one hides exactly the drop this exists to catch.
+     */
+    if (!g->valid) {
+        g->valid = 1;
+        g->sm_mhz_first = g->sm_mhz_min = g->sm_mhz_max = sm_hi;
+        g->temp_c_first = g->temp_c_max = temp_hi;
+    } else {
+        if (sm_hi < g->sm_mhz_min) g->sm_mhz_min = sm_hi;
+        if (sm_hi > g->sm_mhz_max) g->sm_mhz_max = sm_hi;
+        if (temp_hi > g->temp_c_max) g->temp_c_max = temp_hi;
+    }
+    g->sm_mhz_last = sm_hi;
+    g->temp_c_last = temp_hi;
+    g->n_samples++;
+}
+
+const char *vb_gpu_throttle_str(uint64_t mask, char *buf, size_t n)
+{
+    static const struct { uint64_t bit; const char *name; } names[] = {
+        { VB_GPU_THROTTLE_POWER,      "power-cap"    },
+        { VB_GPU_THROTTLE_HW_SLOW,    "hw-slowdown"  },
+        { VB_GPU_THROTTLE_SW_THERMAL, "sw-thermal"   },
+        { VB_GPU_THROTTLE_HW_THERMAL, "hw-thermal"   },
+        { VB_GPU_THROTTLE_HW_BRAKE,   "hw-power-brake" },
+    };
+    size_t used = 0;
+
+    if (n == 0)
+        return buf;
+    buf[0] = '\0';
+
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        if (!(mask & names[i].bit))
+            continue;
+        int w = snprintf(buf + used, n - used, "%s%s",
+                         used ? "," : "", names[i].name);
+        if (w < 0 || (size_t) w >= n - used)
+            break;
+        used += (size_t) w;
+    }
+    if (used == 0)
+        snprintf(buf, n, "none");
+    return buf;
 }
