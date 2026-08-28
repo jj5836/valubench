@@ -408,6 +408,13 @@ check-power: $(BUILD)/test_power_model
 check-report: $(BUILD)/test_report_json
 	@$(BUILD)/test_report_json
 
+$(BUILD)/test_virt: tests/test_virt.c $(BUILD)/sysinfo.o $(BUILD)/cpu_features.o
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
+
+# Virtual or bare metal, and the shapes where the honest answer is neither.
+check-virt: $(BUILD)/test_virt
+	@$(BUILD)/test_virt
+
 # A multi-threaded pool must span more than one CPU.
 #
 # This is the check that was missing when autotune pinned every worker to one
@@ -498,6 +505,7 @@ check-working-set: $(BUILD)/valubench
 check: test check-kernels check-scalar check-checkpoints check-threadfail \
        check-power \
        check-pinning \
+       check-virt \
        check-working-set \
        check-report check-contract
 

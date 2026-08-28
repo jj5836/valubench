@@ -33,9 +33,36 @@ typedef struct {
     double loadavg1;
 
     int  has_sse2, has_avx2, has_avx512f;
+
+    /*
+     * Whether this is a virtual machine. Three states rather than a flag,
+     * because on AArch64 there is frequently no way to tell: the x86
+     * hypervisor CPUID bit has no equivalent, so its absence there is not
+     * evidence of bare metal. Reporting "no" on that evidence would be a
+     * confident wrong answer of exactly the kind this benchmark exists to
+     * avoid, and every ARM figure in this project came from a machine whose
+     * status it would have got wrong.
+     *
+     * The evidence is carried alongside the verdict so a reader can disagree
+     * with it.
+     */
+    int  virtualized;               /* vb_virt */
+    char sys_vendor[64];            /* DMI, "" if unreadable */
+    char product_name[64];          /* DMI, "" if unreadable */
 } vb_sysinfo;
 
+typedef enum {
+    VB_VIRT_UNKNOWN = 0,
+    VB_VIRT_NO,
+    VB_VIRT_YES
+} vb_virt;
+
 void vb_sysinfo_collect(vb_sysinfo *si);
+
+/* Exposed for testing: the shapes worth checking are ones no single machine
+   has. `hv_flag` is 1, 0, or -1 where the x86 hypervisor bit does not apply. */
+int vb_classify_virt(const char *sys_vendor, const char *product_name,
+                     int hv_flag);
 
 /*
  * Environment conditions that make results less trustworthy, as a

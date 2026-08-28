@@ -92,10 +92,29 @@ def main():
         os.remove(db_path)
     db = sqlite3.connect(db_path)
 
-    columns = None
+    # The schema is the union over every readable file, not the first one's.
+    # Captures accumulate columns over time -- `virtualized` arrived after
+    # sixteen captures existed -- and taking the first file's header would
+    # drop whatever a later, wider file added, silently and depending on
+    # nothing more than sort order.
+    columns = []
+    seen = set()
+    for path in files:
+        try:
+            head = next(csv.reader(open(path)), None)
+        except Exception:
+            continue
+        if not head or "kernel" not in head or len(head) < 38:
+            continue
+        for column in head:
+            if column not in seen:
+                seen.add(column)
+                columns.append(column)
+
     rows = 0
     skipped = []          # (file, why) -- reported, never swallowed
     captures = set()
+    created = False
 
     for path in files:
         capture = os.path.basename(os.path.dirname(path))
@@ -111,11 +130,11 @@ def main():
             skipped.append((path, f"not the sweep schema ({len(data[0])} columns)"))
             continue
 
-        if columns is None:
-            columns = list(data[0].keys())
+        if not created:
             extra = ["capture", "instance", "part", "uarch", "source_file"]
             db.execute("CREATE TABLE m (%s)"
                        % ",".join('"%s"' % c for c in columns + extra))
+            created = True
 
         instance, part, uarch = identify(capture)
         captures.add(capture)
@@ -126,7 +145,7 @@ def main():
                        values)
             rows += 1
 
-    if columns is None:
+    if not created:
         sys.exit("ingest: no file matched the sweep schema; nothing to build")
 
     for index in ("kernel", "algorithm", "isa", "capture", "part", "compiler",

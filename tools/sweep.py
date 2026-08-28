@@ -149,6 +149,7 @@ CSV_COLUMNS = [
     "checksum",
     "samples",
     "cpu",
+    "virtualized",
     "governor",
     "loadavg_1min",
     "compiler",
@@ -502,6 +503,9 @@ def row_from_result(d, status, point=None):
         "checksum": d["verification"]["checksum"],
         "samples": len(r["samples"]),
         "cpu": e["cpu"],
+        # yes/no/unknown. Every ARM machine measured so far is a VM
+        # that no x86-style check could identify as one.
+        "virtualized": e.get("virtualized", ""),
         "governor": e["governor"],
         "loadavg_1min": e.get("loadavg_1min"),
         "compiler": e["compiler"],

@@ -116,6 +116,112 @@ static void collect_compiler(vb_sysinfo *si)
 #endif
 }
 
+/*
+ * Virtual machine or bare metal.
+ *
+ * Two signals, neither sufficient alone:
+ *
+ *   The x86 `hypervisor` CPUID bit, which the kernel surfaces as a flag in
+ *   /proc/cpuinfo. Definitive where it exists -- present means virtualised,
+ *   absent means not -- and it does not exist on AArch64 at all. `lscpu`
+ *   relies on it, which is why every Graviton and Grace capture in this
+ *   project reports no hypervisor while running on Nitro.
+ *
+ *   DMI, which both architectures expose. A hypervisor usually names itself
+ *   there: QEMU, Bochs, VMware, Xen, KVM, Microsoft (Hyper-V), innotek and
+ *   Oracle (VirtualBox), Parallels. EC2 is the awkward case -- it reports
+ *   "Amazon EC2" for virtual and bare-metal instances alike -- so the
+ *   instance type in product_name decides, a `.metal` suffix meaning the
+ *   whole machine.
+ *
+ * Anything the two cannot settle stays unknown.
+ */
+static int dmi_field(const char *name, char *out, size_t n)
+{
+    char path[128];
+
+    snprintf(path, sizeof path, "/sys/class/dmi/id/%s", name);
+    if (read_line_file(path, out, n))
+        return 1;
+    /* Some kernels only expose the virtual path. */
+    snprintf(path, sizeof path, "/sys/devices/virtual/dmi/id/%s", name);
+    return read_line_file(path, out, n);
+}
+
+static int cpuinfo_has_hypervisor_flag(void)
+{
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    char line[4096];
+    int found = 0;
+
+    if (!f)
+        return -1;                  /* cannot tell */
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "flags", 5) != 0)
+            continue;
+        if (strstr(line, " hypervisor") || strstr(line, "\thypervisor")) {
+            found = 1;
+            break;
+        }
+        found = 0;                  /* a flags line without it */
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+/*
+ * Pure, so the shapes that matter can be tested without owning the machines
+ * that produce them. `hv_flag` is 1, 0, or -1 for "the question does not
+ * apply here", which is what AArch64 always passes.
+ */
+int vb_classify_virt(const char *sys_vendor, const char *product_name,
+                     int hv_flag)
+{
+    static const char *hv[] = {
+        "QEMU", "Bochs", "VMware", "Xen", "KVM", "Microsoft Corporation",
+        "innotek GmbH", "Oracle Corporation", "Parallels", "Apple Inc.",
+        "Red Hat", "Google", "OpenStack", "Alibaba Cloud", "Nutanix",
+    };
+
+    if (!sys_vendor) sys_vendor = "";
+    if (!product_name) product_name = "";
+
+    /* EC2 first: it also matches nothing in the list, but its product name is
+       the discriminator and a later rule must not pre-empt it. */
+    if (strstr(sys_vendor, "Amazon EC2")) {
+        if (product_name[0])
+            return strstr(product_name, "metal") ? VB_VIRT_NO : VB_VIRT_YES;
+        return hv_flag >= 0 ? (hv_flag ? VB_VIRT_YES : VB_VIRT_NO)
+                            : VB_VIRT_UNKNOWN;
+    }
+
+    for (size_t i = 0; i < sizeof hv / sizeof hv[0]; i++)
+        if (sys_vendor[0] && strstr(sys_vendor, hv[i]))
+            return VB_VIRT_YES;
+
+    /* Absence of the flag is evidence of bare metal only where the flag could
+       have appeared. On AArch64 it could not, so nothing is concluded. */
+    if (hv_flag >= 0)
+        return hv_flag ? VB_VIRT_YES : VB_VIRT_NO;
+    return VB_VIRT_UNKNOWN;
+}
+
+static void collect_virt(vb_sysinfo *si)
+{
+    int flag = -1;
+
+    if (!dmi_field("sys_vendor", si->sys_vendor, sizeof si->sys_vendor))
+        si->sys_vendor[0] = '\0';
+    if (!dmi_field("product_name", si->product_name, sizeof si->product_name))
+        si->product_name[0] = '\0';
+
+#if defined(__x86_64__) || defined(__i386__)
+    flag = cpuinfo_has_hypervisor_flag();
+#endif
+    si->virtualized = vb_classify_virt(si->sys_vendor, si->product_name, flag);
+}
+
 void vb_sysinfo_collect(vb_sysinfo *si)
 {
     memset(si, 0, sizeof *si);
@@ -138,6 +244,7 @@ void vb_sysinfo_collect(vb_sysinfo *si)
     collect_governor(si);
     collect_freq(si);
     collect_os(si);
+    collect_virt(si);
     collect_compiler(si);
 
     si->has_sse2     = vb_cpu_has_sse2();

@@ -231,7 +231,15 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
             si->has_avx2 ? "true" : "false",
             si->has_avx512f ? "true" : "false");
     fprintf(f, "    \"threads_used\": %u,\n", r->threads);
-    fprintf(f, "    \"pinned_cpus\": %u\n", r->pinned_cpus);
+    fprintf(f, "    \"pinned_cpus\": %u,\n", r->pinned_cpus);
+    /* The verdict and the evidence behind it, so a reader can disagree.
+       "unknown" is a real answer on AArch64, where the x86 hypervisor
+       bit has no equivalent and DMI may name nothing. */
+    json_kv_str(f, "virtualized",
+                si->virtualized == VB_VIRT_YES ? "yes" :
+                si->virtualized == VB_VIRT_NO  ? "no"  : "unknown", ",");
+    json_kv_str(f, "sys_vendor", si->sys_vendor, ",");
+    json_kv_str(f, "product_name", si->product_name, "");
     fprintf(f, "  },\n");
 
     fprintf(f, "  \"energy\": {\n");
