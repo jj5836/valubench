@@ -128,28 +128,50 @@ unsigned vb_online_cpus(void)
  *
  * Falls back to the online count if the mask cannot be read, which is the old
  * behaviour and no worse than it.
+ *
+ * Queried and cached on the first call rather than every call. Worker 0 in
+ * pool_create() runs on the thread that calls this function and pins that
+ * very thread to allowed[0] -- so a second call after any pool has run no
+ * longer sees the process's real mask, it sees the narrowed one the first
+ * pin left behind. Autotune builds and tears down a pool per candidate
+ * kernel on the same calling thread, so by the second probe every later
+ * pool, including the one behind the reported result, was pinning every
+ * worker to that single CPU: eight "threads" contending for one core, no
+ * pin failure reported because CPU 0 always accepted the request. The cache
+ * captures the mask before the first pin can touch it.
  */
 unsigned vb_allowed_cpus(int *out, unsigned max)
 {
-    cpu_set_t set;
-    unsigned n = 0;
+    static int cached[VB_MAX_THREADS];
+    static unsigned cached_n = 0;
+    static int have_cache = 0;
 
     if (max == 0)
         return 0;
 
-    if (sched_getaffinity(0, sizeof set, &set) != 0) {
-        unsigned online = vb_online_cpus();
-        for (unsigned i = 0; i < online && n < max; i++)
-            out[n++] = (int) i;
-        return n;
+    if (!have_cache) {
+        cpu_set_t set;
+        unsigned n = 0;
+
+        if (sched_getaffinity(0, sizeof set, &set) != 0) {
+            unsigned online = vb_online_cpus();
+            for (unsigned i = 0; i < online && n < VB_MAX_THREADS; i++)
+                cached[n++] = (int) i;
+        } else {
+            for (unsigned cpu = 0; cpu < CPU_SETSIZE && n < VB_MAX_THREADS; cpu++)
+                if (CPU_ISSET(cpu, &set))
+                    cached[n++] = (int) cpu;
+
+            if (n == 0)               /* an empty mask should not happen */
+                cached[n++] = 0;
+        }
+        cached_n = n;
+        have_cache = 1;
     }
 
-    for (unsigned cpu = 0; cpu < CPU_SETSIZE && n < max; cpu++)
-        if (CPU_ISSET(cpu, &set))
-            out[n++] = (int) cpu;
-
-    if (n == 0)                      /* an empty mask should not happen */
-        out[n++] = 0;
+    unsigned n = cached_n < max ? cached_n : max;
+    for (unsigned i = 0; i < n; i++)
+        out[i] = cached[i];
     return n;
 }
 
