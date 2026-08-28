@@ -146,6 +146,16 @@ _Nothing yet._
 - **`pinned_cpus` in every result**, so a pool confined to fewer cores than it
   claims says so on the face of the output.
 
+- **`check-pinning`**, which asserts a multi-threaded pool spans more than one
+  CPU. This is the check that was missing when autotune collapsed every worker
+  onto one core: no baseline is needed, because it is an invariant rather than
+  a comparison against a recorded figure — and a recorded figure was never
+  available, since results are deliberately kept out of the repository. It
+  fails on a build with the bug, and fails again if `pinned_cpus` ever
+  disappears from the output rather than passing quietly. A single-CPU machine
+  says it cannot run the check; CI asserts the runner has more than one core,
+  so a change there cannot make it vacuous.
+
 - **CI gained teeth**: an ASan/UBSan job, a software-OpenCL job, SVE at four
   vector lengths under emulation with a deliberate non-power-of-two width, a
   multi-block sweep against the scalar reference, an objdump assertion that the

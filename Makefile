@@ -408,6 +408,42 @@ check-power: $(BUILD)/test_power_model
 check-report: $(BUILD)/test_report_json
 	@$(BUILD)/test_report_json
 
+# A multi-threaded pool must span more than one CPU.
+#
+# This is the check that was missing when autotune pinned every worker to one
+# core: pool_create() pins the calling thread, vb_allowed_cpus() read the mask
+# back from that same thread, and after the first probe every later pool put
+# all of its workers on one CPU -- reporting the thread count it was asked for
+# and running at a third of the speed. Nothing in the output could express
+# "eight threads, one core", so review, sanitizers and five hardware sessions
+# all missed it.
+#
+# No baseline needed, which is the point: this is an invariant, not a
+# comparison against a recorded figure. A single-CPU machine cannot test it and
+# says so rather than passing quietly.
+check-pinning: $(BUILD)/valubench
+	@n=$$(nproc 2>/dev/null || echo 1); \
+	 if [ "$$n" -lt 2 ]; then \
+	   echo "  skip  pinning       (needs >1 cpu; this machine has $$n)"; \
+	 else \
+	   t=$$(if [ "$$n" -gt 4 ]; then echo 4; else echo "$$n"; fi); \
+	   out=$$($(BUILD)/valubench --json --algorithm md5 --where cpu \
+	            --threads $$t --samples 3 --time-ms 40 --warmup-ms 40 \
+	          2>/dev/null); \
+	   got=$$(printf '%s' "$$out" | python3 -c \
+	     'import json,sys; e=json.load(sys.stdin)["environment"]; \
+print(e["threads_used"], e["pinned_cpus"])' 2>/dev/null); \
+	   used=$$(echo "$$got" | cut -d" " -f1); \
+	   cpus=$$(echo "$$got" | cut -d" " -f2); \
+	   if [ -z "$$cpus" ]; then \
+	     echo "  FAIL  pinning       no pinned_cpus in the result"; exit 1; \
+	   elif [ "$$cpus" -lt 2 ]; then \
+	     echo "  FAIL  pinning       $$used threads pinned onto $$cpus cpu"; exit 1; \
+	   else \
+	     echo "  ok    pinning       ($$used threads across $$cpus cpus)"; \
+	   fi; \
+	 fi
+
 check-contract: $(BUILD)/valubench
 	@sh tests/check_output_contract.sh $(BUILD)/valubench .
 
@@ -461,6 +497,7 @@ check-working-set: $(BUILD)/valubench
 
 check: test check-kernels check-scalar check-checkpoints check-threadfail \
        check-power \
+       check-pinning \
        check-working-set \
        check-report check-contract
 
