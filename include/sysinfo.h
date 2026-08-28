@@ -46,6 +46,28 @@ typedef struct {
      * The evidence is carried alongside the verdict so a reader can disagree
      * with it.
      */
+    /*
+     * Re-read after the timed region. A part benchmarked cold and one
+     * benchmarked after twenty minutes of load are different machines, and a
+     * single reading at startup cannot tell them apart -- it is taken before
+     * the work that would move it. The delta is what makes thermal drift
+     * visible rather than an unstated assumption.
+     */
+    long   freq_khz_at_end;         /* -1 if unreadable */
+    char   governor_at_end[32];
+    double loadavg1_at_end;         /* -1 if unavailable */
+
+    /*
+     * CPU package temperature in millidegrees C, -1 when no sensor answers,
+     * and the name of the zone that answered. An ambient or chassis sensor is
+     * not a substitute: reporting 28 C for a package sitting at 53 would be a
+     * confident wrong number, so only CPU-ish zones are believed and anything
+     * else reports unavailable.
+     */
+    long temp_milli_c;
+    long temp_milli_c_at_end;
+    char temp_source[32];
+
     int  virtualized;               /* vb_virt */
     char sys_vendor[64];            /* DMI, "" if unreadable */
     char product_name[64];          /* DMI, "" if unreadable */
@@ -58,6 +80,10 @@ typedef enum {
 } vb_virt;
 
 void vb_sysinfo_collect(vb_sysinfo *si);
+
+/* Re-read the fields that move during a run: frequency, governor, load and
+   temperature. Everything else is fixed for the process's lifetime. */
+void vb_sysinfo_resample(vb_sysinfo *si);
 
 /* Exposed for testing: the shapes worth checking are ones no single machine
    has. `hv_flag` is 1, 0, or -1 where the x86 hypervisor bit does not apply. */

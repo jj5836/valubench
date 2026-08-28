@@ -217,7 +217,16 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
     json_kv_str(f, "governor", si->governor, ",");
     fprintf(f, "    \"freq_khz_min\": %ld,\n", si->freq_khz_min);
     fprintf(f, "    \"freq_khz_max\": %ld,\n", si->freq_khz_max);
-    fprintf(f, "    \"freq_khz_at_start\": %ld,\n", si->freq_khz_now);
+    fprintf(f, "    \"freq_khz_at_start\": %ld,\n", si->freq_khz_now);    /* Re-read after the timed region. -1 means not taken. A drop between the
+       two is thermal or power drift, which a single startup reading cannot
+       show. */
+    fprintf(f, "    \"freq_khz_at_end\": %ld,\n", si->freq_khz_at_end);
+    fprintf(f, "    \"loadavg_1min_at_end\": %.2f,\n", si->loadavg1_at_end);
+    fprintf(f, "    \"temp_milli_c\": %ld,\n", si->temp_milli_c);
+    fprintf(f, "    \"temp_milli_c_at_end\": %ld,\n", si->temp_milli_c_at_end);
+    json_kv_str(f, "temp_source", si->temp_source, ",");
+    json_kv_str(f, "governor_at_end", si->governor_at_end, ",");
+
     if (si->loadavg1 >= 0.0)
         fprintf(f, "    \"loadavg_1min\": %.2f,\n", si->loadavg1);
     else

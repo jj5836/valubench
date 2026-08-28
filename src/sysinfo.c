@@ -76,6 +76,77 @@ static void collect_freq(vb_sysinfo *si)
         "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq");
 }
 
+/*
+ * CPU package temperature.
+ *
+ * Zone types are believed selectively. A machine commonly exposes both a
+ * package sensor and an ambient one -- 53 C and 28 C on the development box --
+ * and taking the hottest, or the first, gets it right there by luck and wrong
+ * on the next machine. Only zones that name themselves as CPU or package are
+ * used; anything else reports unavailable, which is a true answer where a
+ * chassis reading dressed as a core temperature is not.
+ */
+static long read_cpu_temp(char *source, size_t source_n)
+{
+    static const char *want[] = {
+        "x86_pkg_temp", "coretemp", "cpu", "soc", "Package", "cpu-thermal",
+    };
+    long best = -1;
+
+    for (int zone = 0; zone < 32; zone++) {
+        char path[128], type[32];
+        long milli;
+
+        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/type", zone);
+        if (!read_line_file(path, type, sizeof type))
+            continue;
+
+        int wanted = 0;
+        for (size_t i = 0; i < sizeof want / sizeof want[0]; i++)
+            if (strstr(type, want[i])) {
+                wanted = 1;
+                break;
+            }
+        if (!wanted)
+            continue;
+
+        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/temp", zone);
+        milli = read_long_file(path);
+        if (milli <= 0)                 /* a zone can exist and not answer */
+            continue;
+
+        if (milli > best) {
+            best = milli;
+            if (source && source_n)
+                snprintf(source, source_n, "%s", type);
+        }
+    }
+    return best;
+}
+
+static double loadavg_1min(void)
+{
+    double la[3];
+
+    return getloadavg(la, 3) >= 1 ? la[0] : -1.0;
+}
+
+void vb_sysinfo_resample(vb_sysinfo *si)
+{
+    vb_sysinfo tmp;
+
+    /* collect_governor writes into a whole sysinfo; give it a scratch one
+       rather than clobbering the startup value we want to compare against. */
+    memset(&tmp, 0, sizeof tmp);
+    collect_governor(&tmp);
+    snprintf(si->governor_at_end, sizeof si->governor_at_end, "%s", tmp.governor);
+
+    si->freq_khz_at_end = read_long_file(
+        "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq");
+    si->loadavg1_at_end = loadavg_1min();
+    si->temp_milli_c_at_end = read_cpu_temp(NULL, 0);
+}
+
 static void collect_os(vb_sysinfo *si)
 {
     struct utsname u;
@@ -245,6 +316,14 @@ void vb_sysinfo_collect(vb_sysinfo *si)
     collect_freq(si);
     collect_os(si);
     collect_virt(si);
+
+    si->temp_milli_c = read_cpu_temp(si->temp_source, sizeof si->temp_source);
+    /* Until vb_sysinfo_resample() runs, the end-of-run fields say "not taken"
+       rather than repeating the start values, which would read as no drift. */
+    si->freq_khz_at_end = -1;
+    si->loadavg1_at_end = -1.0;
+    si->temp_milli_c_at_end = -1;
+    si->governor_at_end[0] = '\0';
     collect_compiler(si);
 
     si->has_sse2     = vb_cpu_has_sse2();
@@ -283,6 +362,33 @@ const char *vb_sysinfo_warnings(const vb_sysinfo *si)
     if (si->smt_active == 1) {
         snprintf(buf + strlen(buf), sizeof buf - strlen(buf),
                  "SMT is enabled, which increases run-to-run variance; ");
+    }
+
+    /*
+     * Drift across the timed region, which a startup reading cannot show. A
+     * clock that fell means the machine measured at the end is not the one
+     * measured at the start, and the samples span both. 5% is well outside the
+     * jitter of a settled part and well inside a real thermal or power-limit
+     * drop.
+     */
+    if (si->freq_khz_now > 0 && si->freq_khz_at_end > 0 &&
+        si->freq_khz_at_end < si->freq_khz_now * 95 / 100) {
+        snprintf(buf + strlen(buf), sizeof buf - strlen(buf),
+                 "clock fell %ld%% during the run (%ld -> %ld kHz), so the "
+                 "later samples are not the same machine as the earlier ones; ",
+                 100 - (si->freq_khz_at_end * 100 / si->freq_khz_now),
+                 si->freq_khz_now, si->freq_khz_at_end);
+    }
+
+    /* Temperature is reported rather than judged -- what counts as hot depends
+       on the part -- except where it rose enough during one run to explain a
+       clock that also fell. */
+    if (si->temp_milli_c > 0 && si->temp_milli_c_at_end > 0 &&
+        si->temp_milli_c_at_end - si->temp_milli_c >= 10000) {
+        snprintf(buf + strlen(buf), sizeof buf - strlen(buf),
+                 "package temperature rose %ld C during the run (%ld -> %ld C); ",
+                 (si->temp_milli_c_at_end - si->temp_milli_c) / 1000,
+                 si->temp_milli_c / 1000, si->temp_milli_c_at_end / 1000);
     }
 
     if (si->freq_khz_now > 0 && si->freq_khz_max > 0 &&

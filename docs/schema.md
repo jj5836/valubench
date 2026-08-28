@@ -36,7 +36,7 @@ The version number moves when a field is removed or its meaning changes.
 | `verification` | `verified`, `checksum`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
 | `device` | present only for device kernels: name, vendor, driver, launch geometry, `kernel_busy_fraction`, `transfer_mode`, and in streaming mode the per-pass transfer figures |
-| `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used` |
+| `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
 | `energy` | `available`, and either `reason` or the joules/watts/`hashes_per_joule` figures with their `sources` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
 
@@ -52,6 +52,26 @@ lanes, streams, threads and devices, so for a given workload it is the same on
 every machine that computes correctly. `compare.py` treats a mismatch as a hard
 failure rather than a performance delta: it means one side computed something
 else.
+
+**`environment`, the fields that describe drift rather than state.** Frequency,
+governor, load and temperature are sampled twice: once at startup and again
+after the timed region, as `*_at_end`. A single startup reading describes a
+machine that has not yet run the benchmark, so a part measured cold and one
+measured after twenty minutes of load are indistinguishable without the pair.
+A clock that fell more than 5%, or a package that warmed more than 10 C, raises
+a warning. `-1` means the reading was not available; `temp_source` names the
+sensor believed, and only CPU or package zones are — an ambient reading dressed
+as a core temperature would be worse than none.
+
+**`environment.pinned_cpus`** — the distinct CPUs the worker pool actually
+spread across. `threads_used` says how many threads were asked for and answers
+nothing about where they ran: a pool reporting eight threads on one core looks
+identical in every other field, and did, for three days.
+
+**`environment.virtualized`** — `yes`, `no`, or `unknown`, with `sys_vendor`
+and `product_name` as the evidence. Three states because the x86 hypervisor
+CPUID bit has no AArch64 equivalent, so its absence there is not evidence of
+bare metal.
 
 **`result.stable`** — false when `cov_percent` exceeds the threshold. The process
 also exits 3 in that case. The number is still a real measurement; it just

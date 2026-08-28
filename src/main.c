@@ -679,6 +679,11 @@ int main(int argc, char **argv)
         return VB_EXIT_VERIFY_FAILED;
     }
 
+    /* Now that the work is done, re-read the things it moves. A clock and a
+       temperature taken only at startup describe a machine that has not run
+       the benchmark yet. */
+    vb_sysinfo_resample(&si);
+
     if (as_json)
         vb_report_json(stdout, &r, &si, &cfg);
     else

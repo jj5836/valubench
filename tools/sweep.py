@@ -150,7 +150,12 @@ CSV_COLUMNS = [
     "samples",
     "cpu",
     "virtualized",
+    "smt_active",
     "governor",
+    "governor_at_end",
+    "freq_khz_at_end",
+    "temp_milli_c",
+    "temp_milli_c_at_end",
     "loadavg_1min",
     "compiler",
     "valubench_version",
@@ -506,7 +511,17 @@ def row_from_result(d, status, point=None):
         # yes/no/unknown. Every ARM machine measured so far is a VM
         # that no x86-style check could identify as one.
         "virtualized": e.get("virtualized", ""),
+        # SMT reached the JSON but never the CSV, so it never reached any
+        # cross-machine comparison -- and it is one of the larger sources of
+        # run-to-run variance.
+        "smt_active": e.get("smt_active", ""),
         "governor": e["governor"],
+        # Sampled again after the timed region: a clock or temperature read
+        # only at startup describes a machine that has not run yet.
+        "governor_at_end": e.get("governor_at_end", ""),
+        "freq_khz_at_end": e.get("freq_khz_at_end", ""),
+        "temp_milli_c": e.get("temp_milli_c", ""),
+        "temp_milli_c_at_end": e.get("temp_milli_c_at_end", ""),
         "loadavg_1min": e.get("loadavg_1min"),
         "compiler": e["compiler"],
         "valubench_version": b["version"],
