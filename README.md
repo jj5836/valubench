@@ -176,6 +176,8 @@ between them is evidence rather than a tautology.
 | [docs/guide.md](docs/guide.md) | Full usage: the three axes, sweeping, comparing runs, GPUs, energy, the PCIe crossover |
 | [docs/design.md](docs/design.md) | What this measures, why MD5, and what measurement changed about the plan |
 | [docs/research.md](docs/research.md) | The decision log — every design choice with its reasoning, including the ones that turned out wrong |
+| [docs/findings.md](docs/findings.md) | Cross-machine conclusions, each with the query that produces it |
+| [docs/results.md](docs/results.md) | Working with captured results: the database, and what is authoritative |
 | [docs/schema.md](docs/schema.md) | The JSON and CSV output contracts, and the compatibility rule |
 | [docs/dependencies.md](docs/dependencies.md) | Per-distribution packages, and what each is for |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, and adding a kernel or an algorithm |
