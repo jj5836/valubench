@@ -82,6 +82,19 @@
 
 void vb_config_defaults(vb_config *cfg)
 {
+    /*
+     * Zero first, then set the fields that have a non-zero default.
+     *
+     * Assigning field by field leaves anything not named holding whatever the
+     * caller's stack held -- and main() puts this struct on the stack.
+     * `have_expected` was never named, so an unlucky frame makes the run skip
+     * the reference computation and compare against `expected`, which is
+     * garbage from the same stack: a correct kernel reported VERIFICATION
+     * FAILED, non-deterministically, varying with compiler and optimisation
+     * level. Adding a field to vb_config must not be able to do that again.
+     */
+    memset(cfg, 0, sizeof *cfg);
+
     cfg->target_ms      = 100;
     cfg->n_samples      = 10;
     cfg->warmup_ms      = 300;

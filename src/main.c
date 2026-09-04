@@ -544,12 +544,35 @@ int main(int argc, char **argv)
      * needs a message at least that long. Refuse rather than silently changing
      * what is being measured.
      */
-    if (cfg.iterations > 1 &&
+    /* Resolved here rather than in the loop: interpreted against the algorithm,
+       and --algorithm may come after it on the command line. Before the guard
+       below rather than after, because that guard needs the top rung. */
+    if (ladder_arg && !parse_ladder(ladder_arg, ladder, VB_MAX_LADDER,
+                                    &n_ladder))
+        return VB_EXIT_USAGE;
+
+    /*
+     * The largest iteration count this run will actually reach, which is not
+     * always cfg.iterations: --reference-ladder walks to its top rung without
+     * touching that field. Guarding on cfg.iterations alone let the ladder
+     * reach vb_reference_checksums() with a message shorter than the digest,
+     * where the feedback memcpy writes the digest over the head of the message
+     * and past the end of its allocation -- 9 bytes for SHA-512 at the default
+     * 55-byte message, confirmed by AddressSanitizer. A heap overflow inside
+     * the correctness oracle.
+     */
+    uint32_t max_iterations = cfg.iterations;
+    for (unsigned li = 0; li < (unsigned) n_ladder; li++)
+        if (ladder[li] > max_iterations)
+            max_iterations = ladder[li];
+
+    if (max_iterations > 1 &&
         cfg.message_bytes < vb_alg_min_iter_bytes(cfg.alg)) {
         fprintf(stderr,
-"valubench: --iterations > 1 with %s needs --message-bytes >= %u.\n"
+"valubench: %s with %s needs --message-bytes >= %u.\n"
 "  Each iteration feeds the %u-byte digest back over the head of the\n"
 "  message, so a shorter message has nowhere to put it.\n",
+                n_ladder ? "a reference ladder above 1" : "--iterations > 1",
                 cfg.alg->name, vb_alg_min_iter_bytes(cfg.alg),
                 cfg.alg->digest_bytes);
         return VB_EXIT_USAGE;
@@ -565,11 +588,6 @@ int main(int argc, char **argv)
         return VB_EXIT_USAGE;
     }
 
-    /* Resolved here rather than in the loop: both are interpreted against the
-       algorithm, and --algorithm may come after them on the command line. */
-    if (ladder_arg && !parse_ladder(ladder_arg, ladder, VB_MAX_LADDER,
-                                    &n_ladder))
-        return VB_EXIT_USAGE;
     if (expect_arg && !parse_expect(expect_arg, &cfg))
         return VB_EXIT_USAGE;
 

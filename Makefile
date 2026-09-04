@@ -268,6 +268,13 @@ HDRS := include/hashes.h include/sha512_const.h \
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)
 
+# registry.c includes kernels/cpu/matrix.h, but is built by the generic
+# src/%.c rule whose prerequisites are $(HDRS) alone. Editing the kernel matrix
+# therefore left a stale registry.o behind -- the one object whose contents are
+# generated from that header. Named explicitly rather than folded into $(HDRS),
+# which would rebuild every object for a kernel-only change.
+$(BUILD)/registry.o: $(KHDRS)
+
 .PHONY: all test check check-kernels clean config
 
 all: $(BUILD)/valubench $(BUILD)/test_hashes $(BUILD)/test_kernels
@@ -352,6 +359,9 @@ $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
 $(BUILD)/test_report_json.o: tests/test_report_json.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/test_config.o: tests/test_config.c $(HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/test_checkpoints.o: tests/test_checkpoints.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -414,6 +424,13 @@ $(BUILD)/test_virt: tests/test_virt.c $(BUILD)/sysinfo.o $(BUILD)/cpu_features.o
 # Virtual or bare metal, and the shapes where the honest answer is neither.
 check-virt: $(BUILD)/test_virt
 	@$(BUILD)/test_virt
+
+$(BUILD)/test_config: $(BUILD)/test_config.o $(CORE_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# Nothing in a freshly defaulted config may be indeterminate.
+check-config: $(BUILD)/test_config
+	@$(BUILD)/test_config
 
 # A multi-threaded pool must span more than one CPU.
 #
@@ -506,6 +523,7 @@ check: test check-kernels check-scalar check-checkpoints check-threadfail \
        check-power \
        check-pinning \
        check-virt \
+       check-config \
        check-working-set \
        check-report check-contract
 

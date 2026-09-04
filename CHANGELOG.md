@@ -7,6 +7,22 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **A heap overflow in the correctness oracle, reachable from a documented
+  flag.** The digest-fits-message guard tested `cfg.iterations`, which
+  `--reference-ladder` never sets, so the ladder walked to its top rung with a
+  message shorter than the digest and the feedback `memcpy` wrote past the end
+  of its allocation. `--algorithm sha512 --reference-ladder 1,2` at the default
+  55-byte message writes 64 bytes into 55, confirmed by AddressSanitizer; the
+  guard also ran before the ladder was parsed, so it could not have seen the
+  rungs in any case. Both are fixed and four cases are in the output contract.
+
+- **`vb_config_defaults()` left `have_expected` indeterminate.** It assigned
+  fifteen fields by name and touched nothing else, and `main()` puts the
+  struct on the stack. Non-zero there makes a run skip the reference
+  computation and compare against `expected`, garbage from the same frame, so
+  a correct kernel reports VERIFICATION FAILED -- non-deterministically,
+  varying with compiler and optimisation level. It now zeroes first.
+
 - **Two GPUs from different vendors: one was silently dropped.** VB-004 stopped
   a card being counted twice by picking one energy provider per scope and
   discarding the rest. That is right when two providers see one card and wrong

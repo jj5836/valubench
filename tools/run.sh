@@ -113,13 +113,20 @@ Keep --ws well under the device's max allocation, which --list-devices reports.
 EOF
 }
 
+# `shift 2` on a lone trailing option shifts nothing -- the script is set -u,
+# not set -e, so the failure is silent and $1 stays put forever. Check before
+# shifting rather than after.
+need_arg() {
+    [ "$2" -ge 2 ] || { echo "run.sh: $1 needs an argument" >&2; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        -o) OUT="${2:-}"; shift 2 ;;
+        -o) need_arg "$1" $#; OUT="${2:-}"; shift 2 ;;
         -q|--quick) QUICK=1; shift ;;
-        --only) ONLY="${2:-}"; shift 2 ;;
+        --only) need_arg "$1" $#; ONLY="${2:-}"; shift 2 ;;
         --skip-check) SKIP_CHECK=1; shift ;;
-        --ws) XFER_WS="${2:-}"; shift 2 ;;
+        --ws) need_arg "$1" $#; XFER_WS="${2:-}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "$0: unknown option '$1'" >&2; usage >&2; exit 2 ;;
     esac
@@ -1036,18 +1043,38 @@ if [ "$NDEV" -gt 1 ]; then
         --samples "$SAMPLES" --time-ms "$TIME_MS" > "$OUT/d4-one-device.json" 2>>"$LOG"
     "$BIN" --json --kernel md5/ocl-s1 --device all --working-set-kb "$D4_WS_ALL" \
         --samples "$SAMPLES" --time-ms "$TIME_MS" > "$OUT/d4-all-devices.json" 2>>"$LOG"
-    python3 - "$OUT/d4-one-device.json" "$OUT/d4-all-devices.json" <<'PY' | show
+    #
+    # A third run, for the checksum claim alone. The two above deliberately use
+    # different corpus sizes -- that is what holds the per-device corpus
+    # constant and makes the throughput comparison mean something -- but the
+    # XOR fold is invariant across devices for a *fixed* corpus, not across
+    # corpus sizes. Comparing those two therefore printed "slicing is wrong" on
+    # every multi-GPU host, for slicing that was correct, and sent an operator
+    # hunting a phantom on a rented machine. Device 0 at the full corpus is the
+    # right baseline for equality.
+    "$BIN" --json --kernel md5/ocl-s1 --device 0 --working-set-kb "$D4_WS_ALL" \
+        --samples 2 --time-ms 40 > "$OUT/d4-one-device-fullcorpus.json" 2>>"$LOG"
+    python3 - "$OUT/d4-one-device.json" "$OUT/d4-all-devices.json" \
+             "$OUT/d4-one-device-fullcorpus.json" <<'PY' | show
 import json, sys
 try:
     a = json.load(open(sys.argv[1])); b = json.load(open(sys.argv[2]))
 except Exception as e:
     print("      could not compare: %s" % e); raise SystemExit
-ca, cb = a["verification"]["checksum"], b["verification"]["checksum"]
-print("      1 device   %8.2f MH/s  %s" % (a["result"]["median"]/1e6, ca[:16]))
+cb = b["verification"]["checksum"]
+try:
+    ca = json.load(open(sys.argv[3]))["verification"]["checksum"]
+except Exception:
+    ca = None
+print("      1 device   %8.2f MH/s" % (a["result"]["median"]/1e6))
 print("      %d devices  %8.2f MH/s  %s" % (b["device"]["device_count"] if "device_count" in b.get("device",{}) else 0,
                                             b["result"]["median"]/1e6, cb[:16]))
-print("      checksums %s" % ("MATCH -- the slices tile the corpus" if ca == cb
-                              else "*** DIFFER -- slicing is wrong ***"))
+if ca is None:
+    print("      checksum  baseline run failed; equality not checked")
+else:
+    print("      checksums %s  (both at the full corpus)"
+          % ("MATCH -- the slices tile the corpus" if ca == cb
+             else "*** DIFFER -- slicing is wrong ***"))
 n = b.get("device", {}).get("device_count", 0) or 1
 sc = b["result"]["median"] / a["result"]["median"]
 print("      scaling   %.2fx over %d devices (%.0f%% of linear), corpus held"

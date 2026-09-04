@@ -211,5 +211,34 @@ for r in rows:
     rm -rf "$tmp"
 fi
 
+# A reference ladder must be held to the same digest-fits-message rule as
+# --iterations. It was not: the guard tested cfg.iterations, which the ladder
+# never sets, so the feedback memcpy wrote a 64-byte SHA-512 digest over the
+# head of a 55-byte message and past the end of its allocation. A heap
+# overflow inside the correctness oracle, reachable from a documented flag.
+for spec in "--algorithm sha512 --reference-ladder 1,2" \
+            "--algorithm md5 --message-bytes 8 --reference-ladder 1,2"; do
+    # shellcheck disable=SC2086
+    "$BIN" $spec >/dev/null 2>&1 && rc=0 || rc=$?
+    if [ "$rc" = 2 ]; then
+        pass=$((pass + 1))
+    else
+        echo "  FAIL  output-contract  '$spec' exited $rc, want 2 (usage)"
+        fail=1
+    fi
+done
+
+# And a ladder whose message is long enough must still run.
+for spec in "--algorithm sha512 --message-bytes 64 --reference-ladder 1,2" \
+            "--algorithm md5 --reference-ladder 1,2,4"; do
+    # shellcheck disable=SC2086
+    if "$BIN" $spec >/dev/null 2>&1; then
+        pass=$((pass + 1))
+    else
+        echo "  FAIL  output-contract  '$spec' was refused but is valid"
+        fail=1
+    fi
+done
+
 [ "$fail" = 0 ] || exit 1
 printf '  ok    output-contract  (%d checks: JSON parses, exit codes, tooling)\n' "$pass"
