@@ -27,7 +27,13 @@ jobs:
         run: make CC=${{ matrix.cc }} config
 
       - name: build
-        run: make CC=${{ matrix.cc }} -j$(nproc)
+        run: |
+          make CC=${{ matrix.cc }} -j$(nproc)
+          # A build step that builds nothing exits 0. One did: a rule added
+          # above `all` became the default goal, so this passed in zero
+          # seconds and the failure surfaced three jobs away as "No such file
+          # or directory". Assert the artifact, not the exit status.
+          test -x build/valubench || { echo "FAIL: make produced no binary"; exit 1; }
 
       - name: known-answer vectors and every kernel against its reference
         run: make CC=${{ matrix.cc }} check
@@ -87,7 +93,9 @@ jobs:
         run: make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 config
 
       - name: build
-        run: make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 -j$(nproc)
+        run: |
+          make CC=aarch64-linux-gnu-gcc HOSTCC=cc BUILD=build-arm64 -j$(nproc)
+          test -x build-arm64/valubench || { echo "FAIL: make produced no binary"; exit 1; }
 
       # This is the step that matters most: test_kernels sweeps message sizes,
       # block counts and iteration counts across every registered kernel, so it
@@ -313,7 +321,9 @@ jobs:
           sudo apt-get install -y -qq pocl-opencl-icd ocl-icd-libopencl1 opencl-headers
 
       - name: build
-        run: make config && make -j$(nproc)
+        run: |
+          make config && make -j$(nproc)
+          test -x build/valubench || { echo "FAIL: make produced no binary"; exit 1; }
 
       - name: a device must be visible
         run: |

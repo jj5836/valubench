@@ -268,12 +268,12 @@ HDRS := include/hashes.h include/sha512_const.h \
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)
 
-# registry.c includes kernels/cpu/matrix.h, but is built by the generic
-# src/%.c rule whose prerequisites are $(HDRS) alone. Editing the kernel matrix
-# therefore left a stale registry.o behind -- the one object whose contents are
-# generated from that header. Named explicitly rather than folded into $(HDRS),
-# which would rebuild every object for a kernel-only change.
-$(BUILD)/registry.o: $(KHDRS)
+
+# Before any target, so a rule added above `all` cannot silently become the
+# default goal. One did: the registry.o dependency below sat four lines higher
+# and made `make` build a single object and exit 0, so CI's build step passed
+# in zero seconds and the next step died on a binary that was never linked.
+.DEFAULT_GOAL := all
 
 .PHONY: all test check check-kernels clean config
 
@@ -355,6 +355,13 @@ $(BUILD)/ocl_%.o: src/opencl/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
 
 $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# registry.c includes kernels/cpu/matrix.h, but is built by the generic
+# src/%.c rule whose prerequisites are $(HDRS) alone. Editing the kernel matrix
+# therefore left a stale registry.o behind -- the one object whose contents are
+# generated from that header. Named explicitly rather than folded into $(HDRS),
+# which would rebuild every object for a kernel-only change.
+$(BUILD)/registry.o: $(KHDRS)
 
 $(BUILD)/test_report_json.o: tests/test_report_json.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
