@@ -463,8 +463,34 @@ def pct(v):
 
 
 def row_from_result(d, status, point=None):
-    p, r = d["parameters"], d["result"]
-    k, e, b = d["kernel"], d["environment"], d["benchmark"]
+    """A CSV row from a result document, or a row saying it could not be read.
+
+    Never raises. One malformed document used to throw KeyError out of the grid
+    loop and stop the sweep: rows already written survived, but the
+    balance-point and break-even summaries -- the reason to run a grid -- did
+    not. A point that cannot be parsed is data too, and the run continues.
+    """
+    try:
+        return _row_from_result(d, status, point)
+    except Exception as exc:                       # noqa: BLE001 - see above
+        row = dict.fromkeys(CSV_COLUMNS, "")
+        if point:
+            row.update({k: v for k, v in point.items() if k in CSV_COLUMNS})
+            row["point_id"] = point_id(point)
+        row["status"] = "unreadable-result (%s)" % exc.__class__.__name__
+        return row
+
+
+def _row_from_result(d, status, point=None):
+    # .get throughout: one malformed result used to raise KeyError out of the
+    # grid loop and stop the sweep. Rows already written survived, but the
+    # balance-point and break-even summaries -- the reason to run a grid at all
+    # -- did not. A row that cannot be parsed is worth recording as such and
+    # stepping over.
+    p, r = d.get("parameters", {}), d.get("result", {})
+    k = d.get("kernel", {})
+    e = d.get("environment", {})
+    b = d.get("benchmark", {})
 
     # Absent entirely for CPU kernels, so every device field is optional.
     dev = d.get("device", {})
@@ -622,7 +648,13 @@ def report_balance(rows, out):
 
         n = fit["n_star"]
         warn = ""
-        if fit["r2"] < 0.98:
+        # A two-point fit has r2 = 1.0000 by construction, so the honesty
+        # gate below passed most confidently exactly where it was least
+        # earned. Three points is the minimum at which r2 says anything.
+        if fit["points"] < 3:
+            warn += ("   [%d points -- r2 is 1.0 by construction, not a fit]"
+                     % fit["points"])
+        elif fit["r2"] < 0.98:
             warn += "   [nonlinear, r2=%.3f -- do not quote]" % fit["r2"]
         if fit["transfer_spread"] > 0.15:
             warn += "   [transfer varied %.0f%% across the sweep]" % (
@@ -739,7 +771,11 @@ def break_even(device_points, cpu_points):
                 "%s fit extrapolates to a negative fixed cost (%.3f us) -- the "
                 "ladder contains a point off the line, so the slope and the "
                 "answer are both suspect" % (side, fit["intercept"] * 1e6))
-        if fit["r2"] < 0.98:
+        if fit["points"] < 3:
+            out["warnings"].append(
+                "%s fit has only %d points; r2 is 1.0 by construction"
+                % (fit.get("label", "fit"), fit["points"]))
+        elif fit["r2"] < 0.98:
             out["warnings"].append("%s fit is nonlinear (r2=%.4f)"
                                    % (side, fit["r2"]))
 

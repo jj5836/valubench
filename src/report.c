@@ -234,11 +234,18 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
     json_kv_str(f, "kernel_version", si->kernel, ",");
     json_kv_str(f, "os", si->os, ",");
     json_kv_str(f, "compiler", si->compiler, ",");
+    /* Every ISA the dispatcher gates on. Reporting only the x86 three left
+       every AArch64 result unable to say which instruction set it ran. */
     fprintf(f, "    \"isa_available\": {\"sse2\": %s, \"avx2\": %s, "
-               "\"avx512f\": %s},\n",
-            si->has_sse2 ? "true" : "false",
-            si->has_avx2 ? "true" : "false",
-            si->has_avx512f ? "true" : "false");
+               "\"avx512f\": %s, \"sha_ni\": %s, \"neon\": %s, "
+               "\"sve\": %s, \"sve2\": %s},\n",
+            si->has_sse2    ? "true" : "false",
+            si->has_avx2    ? "true" : "false",
+            si->has_avx512f ? "true" : "false",
+            si->has_sha_ni  ? "true" : "false",
+            si->has_neon    ? "true" : "false",
+            si->has_sve     ? "true" : "false",
+            si->has_sve2    ? "true" : "false");
     fprintf(f, "    \"threads_used\": %u,\n", r->threads);
     fprintf(f, "    \"pinned_cpus\": %u,\n", r->pinned_cpus);
     /* The verdict and the evidence behind it, so a reader can disagree.
@@ -467,8 +474,20 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
     fprintf(f, "    compiler  %s\n", si->compiler);
     fprintf(f, "\n");
 
-    if (warn) {
-        fprintf(f, "  Warnings\n    %s\n\n", warn);
+    /*
+     * Both views warn about the same things. The pinning warning reached the
+     * JSON and not this one, so a human reading a run whose placement was
+     * refused saw nothing -- and the schema promises the two views do not
+     * disagree about what is worth warning about.
+     */
+    if (warn || r->pin_failed) {
+        fprintf(f, "  Warnings\n");
+        if (warn)
+            fprintf(f, "    %s\n", warn);
+        if (r->pin_failed)
+            fprintf(f, "    thread pinning was requested but at least one CPU "
+                       "was refused; placement is not what was asked for\n");
+        fprintf(f, "\n");
     }
 
     fprintf(f, "  Each iteration is a full %s: all %u steps, real message\n",

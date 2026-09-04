@@ -154,6 +154,25 @@ int main(void)
      * by at most 2x -- where dropping one understates by everything that
      * device was doing. Erring toward the smaller error.
      */
+    /*
+     * psys is the whole platform and contains the package, so a total holding
+     * both counts the same silicon twice. dram sits beside the package and is
+     * summed. Both arrive in VB_PWR_OTHER; only one of them is contained.
+     */
+    memset(&p, 0, sizeof p);
+    add(&p, "RAPL package-0", VB_PWR_CPU_PACKAGE, VB_PWR_PROV_RAPL, 0, 10.0);
+    add(&p, "RAPL psys",      VB_PWR_OTHER,       VB_PWR_PROV_RAPL, 1, 25.0);
+    failures += check("psys does not add to a total holding the package",
+                      vb_power_total_joules(&p), 10.0); checks++;
+    failures += check("psys is still reported in its own scope",
+                      vb_power_scope_joules(&p, VB_PWR_OTHER), 25.0); checks++;
+
+    memset(&p, 0, sizeof p);
+    add(&p, "RAPL package-0", VB_PWR_CPU_PACKAGE, VB_PWR_PROV_RAPL, 0, 10.0);
+    add(&p, "RAPL dram",      VB_PWR_OTHER,       VB_PWR_PROV_RAPL, 0, 3.0);
+    failures += check("dram does add: it is outside the package",
+                      vb_power_total_joules(&p), 13.0); checks++;
+
     memset(&p, 0, sizeof p);
     add(&p, "unknown A", VB_PWR_GPU, VB_PWR_PROV_DRM,  0, 30.0);
     add(&p, "unknown B", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 31.0);

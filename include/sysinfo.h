@@ -32,7 +32,15 @@ typedef struct {
        governor or SMT effects -- so it is captured and warned about. */
     double loadavg1;
 
-    int  has_sse2, has_avx2, has_avx512f;
+    /*
+     * Every ISA the dispatcher can gate on, not just the x86 ones. This field
+     * used to carry sse2/avx2/avx512f alone, so on AArch64 all three read
+     * false and NEON, SVE and SVE2 -- the instruction sets that actually ran --
+     * were absent from the record entirely. Nearly a thousand captured rows
+     * name an ISA their own environment block could not express.
+     */
+    int  has_sse2, has_avx2, has_avx512f, has_sha_ni;
+    int  has_neon, has_sve, has_sve2;
 
     /*
      * Whether this is a virtual machine. Three states rather than a flag,

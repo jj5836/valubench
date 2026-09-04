@@ -151,15 +151,42 @@ static size_t vb_ocl_max_global(const vb_ocl_ctx *c)
  */
 static int tune_geometry(vb_ocl_ctx *c)
 {
+    const vb_ocl *cl = vb_ocl_api();
     const size_t cap = vb_ocl_max_global(c);
     double best = -1.0;
     size_t best_global = 0, best_local = 0;
 
     c->repeats = 1;
 
-    for (size_t local = VB_OCL_MIN_LOCAL; local <= VB_OCL_MAX_LOCAL;
+    /*
+     * The ceiling is the smaller of what the device allows in general and what
+     * it allows for *this* kernel. clGetKernelWorkGroupInfo was loaded and
+     * never called, so a register-poor device -- some Mali parts cap SHA-512
+     * s4 below 64 -- was offered nothing it could accept and reported "no
+     * workable launch geometry" instead of running at 32.
+     */
+    size_t ceiling = c->dev.max_work_group ? c->dev.max_work_group
+                                           : VB_OCL_MAX_LOCAL;
+    {
+        size_t kmax = 0;
+        if (cl->GetKernelWorkGroupInfo &&
+            cl->GetKernelWorkGroupInfo(c->kernel, c->dev.device,
+                                       CL_KERNEL_WORK_GROUP_SIZE,
+                                       sizeof kmax, &kmax, NULL) == CL_SUCCESS
+            && kmax > 0 && kmax < ceiling)
+            ceiling = kmax;
+    }
+
+    /* Prefer 64, but drop to what the kernel actually permits rather than
+       giving up. The reduction halves its span each step, so the size must
+       stay a power of two; 8 is the smallest worth attempting. */
+    size_t floor_local = VB_OCL_MIN_LOCAL;
+    while (floor_local > 8 && floor_local > ceiling)
+        floor_local >>= 1;
+
+    for (size_t local = floor_local; local <= VB_OCL_MAX_LOCAL;
          local <<= 1) {
-        if (local > c->dev.max_work_group)
+        if (local > ceiling)
             break;
 
         /*

@@ -109,9 +109,14 @@ jobs:
         env:
           QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
         run: |
+          # pipefail, so a binary that dies is reported as a binary that died
+          # rather than as an empty checksum that failed to match. Without it
+          # every failure in this pipeline looks like the same failure.
+          set -o pipefail
           got=$(./build-arm64/valubench --kernel md5/neon-s4 --threads 1 \
                   --samples 2 --time-ms 20 --warmup-ms 20 \
-                | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+                | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2) || {
+              echo "FAIL: the run did not complete"; exit 1; }
           echo "neon: $got"
           test "$got" = "955e84cbbc05470019604a2bd9ff2821"
 

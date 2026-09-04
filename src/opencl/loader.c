@@ -247,6 +247,15 @@ int vb_ocl_devices(vb_ocl_device *out, int max)
                               sizeof o->type, &o->type, NULL);
             cl->GetDeviceInfo(devices[d], CL_DEVICE_MAX_COMPUTE_UNITS,
                               sizeof o->compute_units, &o->compute_units, NULL);
+    /*
+     * A device that reports zero compute units hangs the geometry tuner: the
+     * candidate global size is local * mult * compute_units, which stays 0
+     * however far mult grows, so it never reaches the cap that ends the loop.
+     * The query is not required to succeed and some ICDs leave the value
+     * untouched, so a floor of one is cheaper than trusting it.
+     */
+    if (o->compute_units == 0)
+        o->compute_units = 1;
             cl->GetDeviceInfo(devices[d], CL_DEVICE_MAX_CLOCK_FREQUENCY,
                               sizeof o->clock_mhz, &o->clock_mhz, NULL);
             cl->GetDeviceInfo(devices[d], CL_DEVICE_MAX_WORK_GROUP_SIZE,

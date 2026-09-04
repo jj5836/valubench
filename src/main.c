@@ -286,10 +286,13 @@ static int parse_ladder(const char *arg, uint32_t *out, unsigned max,
         errno = 0;
         unsigned long v = strtoul(p, &end, 10);
 
-        if (end == p || errno == ERANGE || v < 1 || v > (1u << 24)) {
+        /* The same ceiling --iterations enforces. A ladder exists to
+           precompute checksums a later --expect run consumes, so a rung the
+           benchmark will refuse to run is a rung nobody can use. */
+        if (end == p || errno == ERANGE || v < 1 || v > VB_MAX_ITERS) {
             fprintf(stderr, "valubench: --reference-ladder wants iteration "
                             "counts between 1 and %u, got '%s'\n",
-                    1u << 24, p);
+                    VB_MAX_ITERS, p);
             return 0;
         }
         if (n == max) {
@@ -471,7 +474,7 @@ int main(int argc, char **argv)
             action = ACT_REFERENCE;
         } else if (!strcmp(a, "--iterations")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            if (!parse_uint(a, argv[++i], 1, 1u << 24, &cfg.iterations))
+            if (!parse_uint(a, argv[++i], 1, VB_MAX_ITERS, &cfg.iterations))
                 return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--message-bytes")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;

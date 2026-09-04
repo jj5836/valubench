@@ -329,6 +329,10 @@ void vb_sysinfo_collect(vb_sysinfo *si)
     si->has_sse2     = vb_cpu_has_sse2();
     si->has_avx2     = vb_cpu_has_avx2();
     si->has_avx512f  = vb_cpu_has_avx512f();
+    si->has_sha_ni   = vb_cpu_has_sha_ni();
+    si->has_neon     = vb_cpu_has_neon();
+    si->has_sve      = vb_cpu_has_sve();
+    si->has_sve2     = vb_cpu_has_sve2();
 }
 
 const char *vb_sysinfo_warnings(const vb_sysinfo *si)

@@ -1052,10 +1052,22 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     }
     pool_ready = 1;
     out->threads = pool.n;
-    out->pin_failed = pool.pin_failed;
     out->pinned_cpus = pool.pinned_cpus;
 
     uint64_t reps = calibrate_reps(&pool, cfg->target_ms);
+
+    /*
+     * Read after the first pass, not before it.
+     *
+     * Workers set pin_failed from worker_main, after they clear the start
+     * gate; pool_create returns once they are created, not once they have
+     * pinned. Reading it there caught only the driving thread's own failure,
+     * so a worker refused a CPU went unreported -- the precise mislabelling
+     * this field exists to prevent. calibrate_reps drives a full pass through
+     * both barriers, which is the happens-before that makes every worker's
+     * write visible here.
+     */
+    out->pin_failed = pool.pin_failed;
     if (reps == 0) {
         out->verified = 0;
         goto done;

@@ -252,7 +252,20 @@ static void scan_powercap(vb_power *p, int *denied)
             s->scope = VB_PWR_GPU;
             s->contained = 1;
             snprintf(s->name, sizeof s->name, "RAPL uncore (integrated GPU)");
+        } else if (strstr(name, "psys")) {
+            /*
+             * The whole platform: package, uncore, and everything on the board
+             * the firmware can account for. It therefore *contains* the
+             * package, exactly as uncore does, and adding it to a total that
+             * already has the package counts the same silicon twice. Reported
+             * as its own reading and never summed -- the same rule that fixed
+             * the uncore double-count, applied to the domain that has it worse.
+             */
+            s->scope = VB_PWR_OTHER;
+            s->contained = 1;
+            snprintf(s->name, sizeof s->name, "RAPL psys (whole platform)");
         } else {
+            /* dram and friends: genuinely outside the package, so summed. */
             s->scope = VB_PWR_OTHER;
             snprintf(s->name, sizeof s->name, "RAPL %s", name);
         }

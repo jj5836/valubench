@@ -331,7 +331,12 @@ make -C "$REPO" config > "$OUT/make-config.txt" 2>&1
 "$BIN" --list-devices > "$OUT/devices.txt"     2>&1
 note "kernels registered: $(grep -c 'yes$' "$OUT/kernels.txt") available"
 
-NDEV=$(grep -c '^\[[0-9]' "$OUT/devices.txt" 2>/dev/null || echo 0)
+# `grep -c` prints 0 and exits 1 when it matches nothing, so `|| echo 0`
+# appended a second zero and NDEV became "0\n0" -- every `[ "$NDEV" -gt 0 ]`
+# after it then errored instead of answering, on exactly the device-less
+# machines the count exists to detect.
+NDEV=$(grep -c '^\[[0-9]' "$OUT/devices.txt" 2>/dev/null || true)
+NDEV=${NDEV:-0}
 note "OpenCL devices: $NDEV"
 if [ "$NDEV" -eq 0 ]; then
     note "no OpenCL device -- device phases will be skipped. Reason:"

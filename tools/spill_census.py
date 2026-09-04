@@ -18,6 +18,11 @@ stack in these functions.
 import re, subprocess, sys, json
 
 # x86-64 AT&T: an operand like 0x38(%rsp) or -0x20(%rbp).
+# Instructions that can fold a memory operand into the arithmetic. Not
+# exhaustive by design: these are the forms that appear in the round bodies.
+X86_RMW = ('add', 'sub', 'and', 'or', 'xor', 'cmp', 'test',
+           'adc', 'sbb', 'inc', 'dec', 'imul', 'lea', 'rol', 'ror')
+
 X86_MEM = re.compile(r'-?0x[0-9a-f]+\((%rsp|%rbp)\)|\((%rsp|%rbp)\)')
 # AArch64: [sp, #96] / [x29, #-16] / [sp]
 ARM_MEM = re.compile(r'\[(sp|x29)(,|\])')
@@ -52,11 +57,25 @@ def analyse(arch, lines):
                 frame = int(m.group(1), 16)
             if not X86_MEM.search(rest):
                 continue
+            # AT&T: destination last. Memory on the right is a store.
+            src, _, dst = rest.rpartition(',')
             if op.startswith(('mov', 'movq', 'movl')):
-                # AT&T: destination last. Memory on the right is a store.
-                src, _, dst = rest.rpartition(',')
                 if X86_MEM.search(dst):
                     st += 1
+                elif X86_MEM.search(src):
+                    ld += 1
+            elif op.startswith(X86_RMW):
+                # A folded memory operand: `addl 0x18(%rsp),%eax` reads the
+                # stack slot as part of the arithmetic, no separate mov. This
+                # is the form x86 reaches for under register pressure, which
+                # is exactly the case MD5 creates -- and counting only mov*
+                # made those reloads invisible while AArch64, which has no
+                # folded form and must emit an ldr, counted every one. The
+                # comparison this tool exists to make was biased against
+                # AArch64 by however much the folding saved.
+                if X86_MEM.search(dst):
+                    st += 1          # read-modify-write touches the slot twice
+                    ld += 1
                 elif X86_MEM.search(src):
                     ld += 1
         else:
