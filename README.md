@@ -1,6 +1,6 @@
 # valubench
 
-[![build and check](https://github.com/erichardisty/valubench/actions/workflows/ci.yml/badge.svg)](https://github.com/erichardisty/valubench/actions/workflows/ci.yml)
+[![build and check](https://github.com/silent-runner/valubench/actions/workflows/ci.yml/badge.svg)](https://github.com/silent-runner/valubench/actions/workflows/ci.yml)
 [![license: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
 An integer SIMD microbenchmark. It measures how fast hardware executes the
