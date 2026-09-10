@@ -41,6 +41,140 @@ outside this repository while a durable format for them is decided.
   No captured result is affected. Every machine measured so far has had exactly
   one GPU energy provider, and the fault needs two.
 
+- **`isa_available` described x86 only, so every AArch64 result named no
+  instruction set.** It carried `sse2`, `avx2` and `avx512f` and nothing else,
+  which reported all three false on ARM and left the ISA that actually ran
+  unrecorded. Cross-machine claims are sourced from exactly that field, and
+  986 rows in the results database were affected. All seven flags are now
+  reported.
+
+- **RAPL `psys` was counted twice.** `psys` is the whole platform and contains
+  the package, but fell to the `else` branch marked as not-contained, so a
+  total holding both added the package to itself. `dram` lands in the same
+  scope and is genuinely outside the package, so it still sums; only `psys` is
+  marked contained.
+
+- **`pin_failed` was read before the workers could set it.** `pool_create()`
+  returned and the flag was tested immediately, while workers write it after
+  clearing the start gate — so only the driving thread's own pin failure was
+  ever visible. It is now read after `calibrate_reps()`, whose barrier pass
+  guarantees every worker has run.
+
+- **A dependency line became the Makefile's default goal.** The heap-overflow
+  fix placed `$(BUILD)/registry.o: $(KHDRS)` above `all:`, making it the first
+  target: `make` built one object and exited 0. CI's build step passed in zero
+  seconds and a later job died on a missing binary. The rule has moved down
+  beside the other object rules, `.DEFAULT_GOAL := all` is pinned before any
+  target so the next rule added above `all` cannot repeat it, and every CI
+  build step now asserts the artifact exists rather than trusting the exit
+  status. This project has produced a build-that-builds-nothing four times.
+
+- **The AArch64 cross job failed on a noisy run.** Adding `set -o pipefail` so
+  a crashed binary would report as a crash also made exit 3 fatal — and exit 3
+  is "too noisy to trust", which is ordinary under emulation on a shared
+  runner. The step now runs and parses separately, accepting 0 or 3 and
+  failing anything else.
+
+- **Documentation claims that measurement has since contradicted.** All found
+  by running the benchmark on a desktop Zen 5 part; see the
+  `ryzen9950x-20260909` capture.
+
+  `guide.md` still said MD5 "barely becomes memory-bound" and that reaching a
+  memory-bound regime would need much larger messages or a bandwidth-hungry
+  companion kernel. `design.md` §2a had already retracted that, so the two
+  documents disagreed. Whether the workload becomes memory-bound is a property
+  of the kernel rather than of MD5: a slow kernel never reaches the roofline
+  ridge and a fast one does, and at full core occupancy on a wide part the
+  corpus leaving cache is a cliff rather than a knee.
+
+  `guide.md` also stated that SHA-NI is monotonic in stream count — fewer is
+  better. That holds on every Intel part measured and on neither AMD part:
+  both dip at two streams and peak at three. Applying the Intel rule there
+  costs a few percent, and applying the general interleaving rule costs
+  substantially more.
+
+  The README listed "SVE and SVE2 have no kernel" as the largest known gap.
+  Those kernels exist, are validated on Neoverse V1 and V2, and were missing
+  from the ISA list beside it. Its SHA-NI range and its architecture and
+  fingerprint rosters were also a capture or more out of date, and its
+  toolchain note quoted a two-compiler spread far narrower than the
+  four-compiler figure the project has since measured.
+
+  `avx512.c` still carried "UNVERIFIED ON HARDWARE — this path compiles and is
+  disassembled but has not been executed". It has been executed on three
+  parts; the header now records what the ratio against AVX2 actually is and
+  why it differs between them.
+
+### Added
+
+- **A queryable view over the captures.** `tools/ingest.py` builds a SQLite
+  view of every capture CSV, stdlib only, in about a second, and
+  `docs/results.md` explains why it stays derived and disposable: the CSVs are
+  the record, and a bug in the ingest costs a rebuild rather than a
+  measurement. Machine identity comes from the capture directory rather than
+  the reported CPU, because every ARM part here identifies as "AArch64
+  implementer 0x41" and grouping by that silently merged three
+  microarchitectures. The ingest names every file it skips and why, since a
+  capture script that quietly stopped emitting the sweep schema looks
+  identical to one that was never run.
+
+- **`virtualized`, as three states rather than a boolean.** Nothing in a result
+  said whether it came from a VM, and every ARM number in this project did.
+  The x86 hypervisor CPUID bit is definitive where it exists and has no
+  AArch64 equivalent, so a flag derived from it would confidently report "bare
+  metal" for machines that are certainly not — the exact failure this
+  benchmark exists to avoid. DMI covers both and usually names the hypervisor;
+  what neither settles stays `unknown`. The verdict ships with its evidence,
+  `sys_vendor` and `product_name`, so a reader can disagree with it.
+
+- **The environment is sampled again after the timed region, and temperature
+  is recorded.** Frequency, governor and load were read once at startup,
+  describing a machine that had not yet run the benchmark; they are now also
+  read afterwards as `*_at_end`, with a warning when the clock falls more than
+  5%. Package temperature is recorded at both ends with a warning on a rise of
+  more than 10 C, because a part benchmarked cold and one benchmarked after
+  twenty minutes of load are different machines. Only CPU and package thermal
+  zones are believed, and `temp_source` names what answered.
+
+- **Guidance for three ways a run can report a real number that means
+  something other than it appears to**, all in `guide.md`, with the
+  `cov_percent` scope note also in `docs/schema.md`.
+
+  The default working set lands on the L2 capacity boundary of a core with
+  1 MiB of L2, and what that costs depends on the stream count — the
+  high-stream AVX-512 kernels lose heavily where the four-stream one and AVX2
+  barely move. The stream ordering inverts across that boundary, so
+  **autotune's choice of kernel depends on `--working-set-kb`**.
+
+  A kernel processes `lanes x streams` messages per group, so a pool wants at
+  least `threads x lanes x streams` messages before any lane-level figure
+  means anything. At long message lengths the default corpus supplies far
+  fewer and the point silently under-reports. This is the CPU form of the
+  device-side saturation limit already documented.
+
+  `cov_percent` is within-process dispersion, not reproducibility: its samples
+  share one corpus placement, one thermal state and one boost state. Measured
+  on a desktop Zen 5 part, consecutive runs of one command spanned two orders
+  of magnitude more variation than any single run reported. A low
+  `cov_percent` is necessary and not sufficient.
+
+- **A note that partial SMT occupancy is pathological**, in `guide.md`.
+  Workers pin in ascending CPU order and Linux numbers physical cores before
+  their siblings, so a thread count between one-per-core and full occupancy
+  fills some cores twice and leaves others single. The corpus splits equally
+  regardless, so the doubled cores become stragglers the batch waits on. Use
+  one thread per core or every thread, not a count in between.
+
+### Changed
+
+- **Cross-machine reasoning now lives with the captures, not in this
+  repository.** Conclusions that span more than one machine — each stated with
+  the SQL that produces it — sit beside the results they interpret, for the
+  same reason the measurements do: a claim is false the moment its query stops
+  supporting it, and that should not be a commit against the source tree.
+  Single-machine results stay in their own capture's README.
+  `docs/results.md` records the split.
+
 ## 0.6.0 — 2026-08-28
 
 ### Fixed
