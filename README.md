@@ -36,8 +36,10 @@ Four questions it answers with numbers rather than reasoning:
   256-bit operation into halves. Same source, same instructions.
 - **Is a dedicated accelerator worth using?** A CPU's fixed-function SHA unit
   has measured anywhere from 2.13x *faster* than the vector path beside it to
-  0.25x as fast — an 8.5x spread across three cores. Which one you have decides
-  whether using it is a win or a 75% loss.
+  0.21x as fast — a 10x spread. On every part with a capture it is the
+  *slower* of the two, and how much slower depends entirely on the vector path
+  beside it. Which one you have decides whether using it is a win or a 79%
+  loss.
 - **When does offloading to a GPU pay?** Two separate numbers, because they
   disagree: N\* is where compute overtakes the PCIe transfer, and break-even is
   where the accelerator beats the whole host CPU. On an A10 those were 139 and
@@ -63,15 +65,16 @@ So the design is built around not fooling yourself:
 - **Correctness is a gate, not a footnote.** Every run verifies its digests
   against an independent scalar reference and reduces them to a fingerprint that
   is invariant across lanes, streams, threads, devices and instruction sets. The
-  same value comes back from Gracemont, Cascade Lake, Zen 5, Ice Lake, Sapphire
-  Rapids, Neoverse V1, an Intel iGPU, an A10 and two H100s. A run that cannot
-  verify produces no number.
+  same value comes back from Gracemont, Cascade Lake, Zen 5, Milan, Ice Lake,
+  Sapphire Rapids, Neoverse V1 and V2, an Intel iGPU, an A10, an A100 and two
+  H100s. A run that cannot verify produces no number.
 - **Dispersion is reported, and a noisy result says so** — in the output and in
   the exit code.
 - **The environment is captured** with every result: CPU, ISA path actually
   taken, governor, clock, compiler, thread count, device and driver. A number
-  without its machine is not comparable to anything, and two compiler releases
-  alone moved single-thread throughput by −15% to +8% on identical silicon.
+  without its machine is not comparable to anything, and on one part and one
+  instruction set four compilers spanned 4.15x — more than any architectural
+  difference this project has measured.
 - **One binary, runtime dispatch, no `-march=native`.** The build cannot depend
   on the machine that produced it.
 
@@ -176,7 +179,6 @@ between them is evidence rather than a tautology.
 | [docs/guide.md](docs/guide.md) | Full usage: the three axes, sweeping, comparing runs, GPUs, energy, the PCIe crossover |
 | [docs/design.md](docs/design.md) | What this measures, why MD5, and what measurement changed about the plan |
 | [docs/research.md](docs/research.md) | The decision log — every design choice with its reasoning, including the ones that turned out wrong |
-| [docs/findings.md](docs/findings.md) | Cross-machine conclusions, each with the query that produces it |
 | [docs/results.md](docs/results.md) | Working with captured results: the database, and what is authoritative |
 | [docs/schema.md](docs/schema.md) | The JSON and CSV output contracts, and the compatibility rule |
 | [docs/dependencies.md](docs/dependencies.md) | Per-distribution packages, and what each is for |
@@ -184,22 +186,25 @@ between them is evidence rather than a tautology.
 
 ## Status
 
-**Validated on four CPU architectures and three GPUs**, all producing the same
-verification fingerprints: Gracemont, Cascade Lake, Zen 5, Ice Lake-SP,
-Sapphire Rapids, Neoverse V1 (NEON), an Intel iGPU, an NVIDIA A10 and two H100s.
-Scalar, SSE2, AVX2, AVX-512, SHA-NI and NEON CPU kernels; OpenCL device kernels
-for all three algorithms; resident and streaming transfer; multi-device;
-autotune; statistics; energy where counters allow; JSON and human output. GCC
-13.3 and Clang 18.1.3 both build clean under the full warning set and produce
-identical checksums, and CI additionally cross-compiles for AArch64 and runs the
-NEON kernels under emulation.
+**Validated on nine CPU microarchitectures and four GPUs**, all producing the
+same verification fingerprints: Gracemont, Cascade Lake, Zen 5 (server and
+desktop), Milan, Ice Lake-SP, Sapphire Rapids, Neoverse V1 and Neoverse V2, an
+Intel iGPU, an NVIDIA A10, an A100 and two H100s.
+Scalar, SSE2, AVX2, AVX-512, SHA-NI, NEON, SVE and SVE2 CPU kernels; OpenCL
+device kernels for all three algorithms; resident and streaming transfer;
+multi-device; autotune; statistics; energy where counters allow; JSON and human
+output. GCC 13.3 through 16.2 and Clang 18.1 through 22.1 all build clean under
+the full warning set and produce identical checksums, and CI additionally
+cross-compiles for AArch64 and runs the NEON kernels under emulation.
 
 Known gaps, in the order they matter:
 
-- **SVE and SVE2 have no kernel.** Neoverse V1 offers SVE at 256 bits and the
-  NEON measurement leaves roughly half the issue capacity idle, so this is the
-  largest unclaimed number. It needs a vector-length-agnostic kernel, which does
-  not fit the fixed-width template the other ISAs share.
+- **SVE2 is measured only at 128 bits.** The kernels exist and are validated on
+  Neoverse V1 and V2, but no part yet offers SVE2 above 128 bits, so vector
+  width and instruction-set generation stay conflated on that side.
+- **The stream ladder stops at eight.** `matrix.h` instantiates 1, 2, 3, 4, 6
+  and 8 streams. On a desktop Zen 5 core `md5/avx512` was still gaining at
+  eight, so at least one shipped part is not bracketed by the ladder.
 - **AMD GPUs are untested.** NVIDIA and Intel are validated; ROCm and Mesa
   Rusticl have never run this.
 - **Every transfer figure is pageable memory.** An A10 sustained 10.9 GB/s over
@@ -208,9 +213,12 @@ Known gaps, in the order they matter:
 - **Overlapped transfer and compute.** Streaming uploads then launches, in
   order. The reported ratio already answers the pipelined question, so this
   concerns achieved throughput rather than correctness of the ratio.
-- **Nothing pins the toolchain.** Two GCC releases moved single-thread
-  throughput by −15% to +8% on identical silicon, so results are comparable
-  within a compiler and not across one.
+- **Nothing pins the toolchain, and the toolchain is the largest effect in the
+  project.** Four compilers span 4.15x on one part and one instruction set,
+  against at most 1.20x from any instruction-set choice measured anywhere. Even
+  on a settled path the compiler changes *which kernel wins*, so autotune's
+  pick is toolchain-dependent. Results are comparable within a compiler and not
+  across one.
 
 ## Layout
 

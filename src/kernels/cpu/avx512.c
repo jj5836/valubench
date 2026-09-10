@@ -23,9 +23,11 @@
  * x^y^z in a single instruction. Applying it would add work. This is why the
  * round functions are per-ISA macros rather than one shared definition.
  *
- * UNVERIFIED ON HARDWARE: the development machine is an Intel N100, which has
- * no AVX-512. This path compiles and is disassembled but has not been executed.
- * See docs/research.md 4.3.
+ * Measured on Cascade Lake (2026-08-17), on EPYC 9R45 and on a desktop Zen 5
+ * part. Against AVX2 at a matched stream count the instruction-count model
+ * predicts 2.67x; Cascade Lake returns 2.20x because ports 0 and 1 fuse to
+ * serve one 512-bit unit, and both Zen 5 parts return 2.6-2.8x because they do
+ * not fuse. See docs/research.md 4.1, which works this through.
  */
 
 #include <stdint.h>

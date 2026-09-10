@@ -77,6 +77,15 @@ bare metal.
 also exits 3 in that case. The number is still a real measurement; it just
 should not carry an argument on its own.
 
+**`result.cov_percent` is within-process dispersion, not reproducibility.** The
+samples it summarises share one corpus placement, one thermal state and one
+boost state, so it answers "was this run steady" and not "will this number come
+back". The two can differ by a large factor — a desktop Zen 5 part reported
+0.084% within a run while consecutive runs of the same command spanned 7.13%,
+because the default corpus sat on an L2 capacity boundary. A consumer deciding
+whether a change is real should compare the spread *between* runs; see
+[guide.md](guide.md), "What the coefficient of variation does not cover".
+
 ### Exit codes
 
 Reported in the capabilities document under `exit_codes`, so a driver need not

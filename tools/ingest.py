@@ -39,6 +39,10 @@ PARTS = [
     ("c7g",    "Graviton3", "Neoverse V1"),
     ("c8g",    "Graviton4", "Neoverse V2"),
     ("c8a",    "EPYC 9R45", "Zen 5"),
+    # Not a cloud instance: a workstation, so the "instance" column carries the
+    # part name. Kept in the same table because identity still comes from the
+    # directory, which is the property that matters here.
+    ("ryzen9950x", "Ryzen 9 9950X", "Zen 5"),
     ("gh200",  "Grace",     "Neoverse V2"),
     ("metal-spr",     "Xeon 8488C", "Sapphire Rapids"),
     ("lambda-2xh100", "Xeon 8480+", "Sapphire Rapids"),

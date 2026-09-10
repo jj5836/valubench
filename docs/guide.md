@@ -28,14 +28,52 @@ so half the compressions do almost no useful byte-work.
 Sweeping `--working-set-kb` at fixed message length walks the corpus through the
 cache hierarchy (measured).
 
-**MD5 barely becomes memory-bound.** Falling out of L2 costs about a tenth of
-throughput, and going to DRAM costs nothing further. That is the roofline
-talking: one
-compression is several hundred integer ops per 64 bytes, so operational
-intensity is high enough that this workload sits far to the right of the ridge
-point on essentially any machine. Finding a genuine memory-bound regime will
-need much larger messages or a deliberately bandwidth-hungry companion kernel —
-a useful negative result for the goal-2 work.
+**Whether MD5 becomes memory-bound depends on the kernel, not on MD5.** One
+compression is several hundred integer operations per 64 bytes, which puts the
+workload far to the right of the roofline ridge point *at the rate the machine
+can hash* — so a slow kernel never reaches the ridge and a fast one does. On
+the development N100 and on Graviton3 the corpus leaving cache costs a tenth of
+throughput and almost nothing respectively; on a Zen 5 core running AVX-512 it
+costs 44% single-threaded, and across all sixteen cores of a desktop Zen 5 part
+it costs a factor of eight, flattening onto a DRAM floor. On that same machine,
+in the same sweep, AVX2 and scalar barely move.
+
+This section previously said MD5 "barely becomes memory-bound" and that a
+genuine memory-bound regime would need much larger messages or a
+bandwidth-hungry companion kernel. That was a generalisation from the two
+slowest parts measured, and it is wrong on a wide one — see
+[design.md](design.md) §2a, which works through what it means for goal 2.
+Widening the datapath moves you along the roofline toward the ridge, which is
+the same thing as saying a faster kernel is easier to starve.
+
+**The default is not a neutral choice on every part.** `--working-set-kb 1024`
+resolves to a 1,008 KiB corpus, which on a core with 1 MiB of L2 sits on the
+capacity boundary rather than clear of either side. What that costs depends on
+the kernel: on a desktop Zen 5 part `md5/avx512-s4` loses about 4% there while
+`s6` loses 31% and `s8` 40%, and AVX2 and scalar do not notice. Two
+consequences worth knowing before quoting a single-thread number:
+
+- **The stream ordering inverts across the boundary.** In L2 the ranking is
+  s8 > s6 > s4; past it the ranking reverses and s4 is fastest. So
+  **autotune's choice of kernel depends on `--working-set-kb`**, and the kernel
+  it picks at the default is not the one that wins on a corpus that fits.
+- **A single-thread measurement should name a corpus that clearly fits or
+  clearly does not.** Sitting on the boundary also costs reproducibility —
+  see "What the coefficient of variation does not cover" below.
+
+Multi-threaded runs are affected far less, because the corpus is split across
+workers: 1,008 KiB over 32 threads is about 31 KiB each, comfortably inside L1.
+
+**Very long messages need a bigger corpus, not just a bigger message.** A
+kernel processes `lanes x streams` messages per group, and a thread with fewer
+messages than that leaves lanes idle. The whole pool therefore wants at least
+`threads x lanes x streams` messages before any lane-level figure means
+anything — 3,072 on a 32-thread part running a 16-lane, 6-stream kernel. At
+`--message-bytes 16375` the default corpus holds 768, so the point reports
+roughly a third of the compression rate every shorter message length reaches,
+and the deficit is starvation rather than anything about long messages.
+Growing the corpus recovers it monotonically. This is the CPU form of the
+device-side limit described under "Saturating the device" below.
 
 ## Tuning compute intensity
 
@@ -319,6 +357,19 @@ The driving thread is itself worker 0 and does a slice inline. An earlier versio
 had it merely wait at a barrier, which left N workers plus an idle driver
 competing for N cores and pushed the coefficient of variation past 25%.
 
+**On an SMT machine, use either one thread per core or every thread — not a
+count in between.** Workers are pinned to the allowed CPUs in ascending order,
+and Linux numbers the physical cores before their siblings, so a count between
+the two fills some cores twice and leaves others single. The corpus is split
+equally regardless, so the doubled cores become stragglers and the whole batch
+waits on them. On a 16-core, 32-thread desktop Zen 5 part the seventeenth
+thread costs **21%** against sixteen, and the figure does not recover to its
+sixteen-thread value until about twenty-four. Full occupancy is worth 16% over
+one-thread-per-core, so SMT does pay — but only once every core is loaded
+symmetrically. This is the same effect the equal split has across a
+heterogeneous set of devices, described under "Multiple devices run
+concurrently" above.
+
 ## Verification
 
 A benchmark that reports a fast wrong answer has reported nothing. Every kernel
@@ -334,6 +385,25 @@ XORs together each digest it computes, and that checksum is:
    or power limits.
 
 Verification failure is fatal: no performance number is printed.
+
+### What the coefficient of variation does not cover
+
+`cov_percent` is computed over the samples of **one process**, which share a
+corpus placement, a thermal state and a boost state. It is a good measure of
+whether a run was internally steady and a poor measure of whether the number
+will come back the same next time.
+
+The gap can be large. On a desktop Zen 5 part, twelve consecutive
+single-thread runs at the default working set — sitting on the L2 boundary
+described under "Working set" — spanned 376.6 to 453.1 MH/s, a run-to-run
+coefficient of variation of **7.13%**, while each individual run reported
+about **0.084%**. Moving the corpus clear of the boundary brought run-to-run
+variation to 0.16%, and the two figures then agreed.
+
+So a low `cov_percent` is necessary and not sufficient. Where a number carries
+a decision, **repeat the whole process and use the spread between runs as the
+error bar**; `tools/compare.py` already judges a delta against the noise both
+runs reported, and that noise is the within-run kind.
 
 Because XOR is commutative and associative, the checksum does not depend on how
 work is spread across lanes, streams, threads or devices. Every kernel on every
@@ -415,7 +485,7 @@ An earlier figure of 3.1x for this was wrong: the compiler was vectorising the
 scalar kernel, so the comparison was scalar against SSE2 rather than one stream
 against three.
 
-### The one kernel where streams do not help
+### The one kernel where streams mostly do not help
 
 `--algorithm sha1` also builds a **SHA-NI** path, which exists to answer a
 question the rest of the benchmark deliberately avoids: what is a fixed-function
@@ -423,13 +493,17 @@ hash unit actually worth?
 
 `SHA1RNDS4` performs four real SHA-1 rounds in one instruction, so the register
 holds *one* message's state rather than a vector of messages — `lanes = 1`. It
-runs at more than twice the best SIMD path on the N100, and
-the stream ordering inverts with it: fewer streams are monotonically better.
-Everywhere else in this benchmark interleaving is the single biggest
-win; here a lone dependency chain already saturates the unit, so extra streams
-buy nothing and cost registers. That is why the harness measures instead of
-applying a rule — a rule learned from every other kernel picks the worst variant
-here.
+runs at more than twice the best SIMD path on the N100, and the stream ordering
+changes with it: where every other kernel gains substantially from
+interleaving, a lone dependency chain already comes close to saturating the
+unit, so extra streams buy little and cost registers.
+
+**How little, and whether "little" means "nothing", is a property of the
+part.** On all three Intel parts in the database the ordering is monotonic and
+one stream wins. On both Zen 5 parts it is not: throughput dips at two streams,
+peaks at three, and only then falls away. That is why the harness measures
+instead of applying a rule — a rule learned from one vendor picks a variant
+about 20% off the best on the other.
 
 **Read the SHA-NI figure as a ratio, never as an integer-SIMD number.** It is
 also flattered by this CPU: Gracemont is an E-core with a 128-bit vector
