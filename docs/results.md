@@ -23,6 +23,14 @@ mixed a database with an argument: figures were hand-transcribed from CSVs that
 already existed, two had drifted into disagreeing copies, and re-measuring meant
 rewriting prose. Keeping the derived thing disposable is what stops that.
 
+**The reasoning is kept outside the repository too.** Conclusions that span
+more than one machine — each stated with the SQL that produces it — belong with
+the captures they interpret rather than with the tool, for the same reason the
+numbers do: a claim goes stale when a re-measurement stops supporting it, and
+that should not be a commit against the source tree. Single-machine results
+belong to their capture's own README, where the conditions that produced them
+are recorded beside them.
+
 ## Why a database rather than the CSVs
 
 Ninety-odd files across sixteen directories answer a question like *where does
